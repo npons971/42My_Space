@@ -50,7 +50,8 @@ class FtMsgApp(App[None]):
         self.query_one("#messages", RichLog).write(
             "[bold green]42msg prêt[/bold green] — commande: "
             "[bold]/to login message[/bold], "
-            "[bold]/peers[/bold], [bold]/quit[/bold]"
+            "[bold]/peers[/bold], [bold]/link login ip port[/bold], "
+            "[bold]/quit[/bold]"
         )
         self.query_one("#message_input", Input).focus()
         self.run_worker(self._startup())
@@ -131,9 +132,49 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
+        if content.startswith("/link "):
+            parts = content.split(" ")
+            if len(parts) != 4:
+                log.write(
+                    f"[red][{now}] usage:[/red] /link login ip port",
+                )
+                event.input.value = ""
+                return
+            target_login, target_ip = parts[1], parts[2]
+            try:
+                target_port = int(parts[3])
+            except ValueError:
+                log.write(
+                    f"[red][{now}] port invalide[/red]",
+                )
+                event.input.value = ""
+                return
+
+            status = await self.client.link_peer(
+                target_login,
+                target_ip,
+                target_port,
+            )
+            if status == "link_sent":
+                log.write(
+                    f"[yellow][{now}] HELLO envoyé à "
+                    f"{target_login} ({target_ip}:{target_port})[/yellow]",
+                )
+            elif status == "connect_failed":
+                log.write(
+                    f"[red][{now}] impossible de joindre "
+                    f"{target_ip}:{target_port}[/red]",
+                )
+            else:
+                log.write(
+                    f"[red][{now}] client non prêt[/red]",
+                )
+            event.input.value = ""
+            return
+
         log.write(
             f"[red][{now}] commande invalide[/red] "
-            "utilise /to, /peers ou /quit",
+            "utilise /to, /peers, /link ou /quit",
         )
         event.input.value = ""
 

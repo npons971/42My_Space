@@ -85,6 +85,32 @@ Machine B:
 Résultat attendu: chaque machine doit afficher des lignes `ONLINE login=...` et des snapshots avec l'autre login.
 Si les 2 scripts affichent `RESULT: no peer discovered`, c'est presque toujours un filtrage multicast/mDNS sur le réseau (VLAN/switch/ACL).
 
+## Fallback sans mDNS: liaison manuelle
+
+Si le réseau bloque mDNS, vous pouvez forcer la liaison pair à pair.
+
+1. Lancez `42msg --login login_A` et `42msg --login login_B`.
+2. Dans chaque TUI, notez la ligne `Node prêt: <login> écoute sur <port>`.
+3. Faites un lien initial depuis A vers B:
+
+```text
+/link login_B 10.12.x.y PORT_B
+```
+
+4. Puis (optionnel mais conseillé) depuis B vers A:
+
+```text
+/link login_A 10.12.x.z PORT_A
+```
+
+5. Vérifiez avec `/peers`, puis envoyez:
+
+```text
+/to login_B Salut
+```
+
+Le handshake `/link` est signé, met à jour le TOFU local, et permet ensuite l'envoi chiffré normal.
+
 ## Sécurité implémentée
 
 - Chiffrement E2EE par message (PyNaCl/Curve25519).
