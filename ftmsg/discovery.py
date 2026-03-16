@@ -18,7 +18,8 @@ class Peer:
     login: str
     ip: str
     port: int
-    public_key_b64: str | None = None
+    signing_key_b64: str | None = None
+    encryption_key_b64: str | None = None
     last_seen: float = 0.0
 
 
@@ -63,14 +64,23 @@ def _decode_txt_value(value: bytes | str | None) -> str | None:
     return value
 
 
-def build_txt_properties(login: str, ip: str, port: int, public_key_b64: str | None = None) -> dict[bytes, bytes]:
+def build_txt_properties(
+    login: str,
+    ip: str,
+    port: int,
+    signing_key_b64: str | None = None,
+    encryption_key_b64: str | None = None,
+) -> dict[bytes, bytes]:
     properties: dict[bytes, bytes] = {
         b"login": login.encode("utf-8"),
         b"ip": ip.encode("utf-8"),
         b"port": str(port).encode("utf-8"),
     }
-    if public_key_b64:
-        properties[b"pubkey"] = public_key_b64.encode("utf-8")
+    if signing_key_b64:
+        properties[b"sign_pubkey"] = signing_key_b64.encode("utf-8")
+        properties[b"pubkey"] = signing_key_b64.encode("utf-8")
+    if encryption_key_b64:
+        properties[b"enc_pubkey"] = encryption_key_b64.encode("utf-8")
     return properties
 
 
@@ -79,7 +89,11 @@ def parse_peer_from_service_info(info: ServiceInfo) -> Peer | None:
     login = _decode_txt_value(props.get(b"login"))
     ip = _decode_txt_value(props.get(b"ip"))
     port_str = _decode_txt_value(props.get(b"port"))
-    pubkey = _decode_txt_value(props.get(b"pubkey"))
+    signing_key = (
+        _decode_txt_value(props.get(b"sign_pubkey"))
+        or _decode_txt_value(props.get(b"pubkey"))
+    )
+    encryption_key = _decode_txt_value(props.get(b"enc_pubkey"))
 
     if not login or not ip or not port_str:
         return None
@@ -94,7 +108,8 @@ def parse_peer_from_service_info(info: ServiceInfo) -> Peer | None:
         login=login,
         ip=ip,
         port=port,
-        public_key_b64=pubkey,
+        signing_key_b64=signing_key,
+        encryption_key_b64=encryption_key,
         last_seen=time.time(),
     )
 
@@ -117,10 +132,20 @@ class _PeerListener(ServiceListener):
     def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
         self._refresh(service_type, name)
 
-    def update_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+    def update_service(
+        self,
+        zc: Zeroconf,
+        service_type: str,
+        name: str,
+    ) -> None:
         self._refresh(service_type, name)
 
-    def remove_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+    def remove_service(
+        self,
+        zc: Zeroconf,
+        service_type: str,
+        name: str,
+    ) -> None:
         login = name.split(".", 1)[0]
         if login != self._own_login:
             self._peers.remove(login)
@@ -146,14 +171,16 @@ class MdnsDiscovery:
         self,
         login: str,
         listen_port: int,
-        public_key_b64: str | None = None,
+        signing_key_b64: str | None = None,
+        encryption_key_b64: str | None = None,
         local_ip: str | None = None,
         on_peer_online: Callable[[Peer], None] | None = None,
         on_peer_offline: Callable[[str], None] | None = None,
     ) -> None:
         self.login = login
         self.listen_port = listen_port
-        self.public_key_b64 = public_key_b64
+        self.signing_key_b64 = signing_key_b64
+        self.encryption_key_b64 = encryption_key_b64
         self.local_ip = local_ip or resolve_local_ip()
         self.on_peer_online = on_peer_online
         self.on_peer_offline = on_peer_offline
@@ -173,7 +200,8 @@ class MdnsDiscovery:
             login=self.login,
             ip=self.local_ip,
             port=self.listen_port,
-            public_key_b64=self.public_key_b64,
+            signing_key_b64=self.signing_key_b64,
+            encryption_key_b64=self.encryption_key_b64,
         )
 
         service_name = f"{self.login}.{SERVICE_TYPE}"
@@ -194,7 +222,11 @@ class MdnsDiscovery:
             on_peer_online=self.on_peer_online,
             on_peer_offline=self.on_peer_offline,
         )
-        self._browser = ServiceBrowser(self._zeroconf, SERVICE_TYPE, handlers=[self._listener])
+        self._browser = ServiceBrowser(
+            self._zeroconf,
+            SERVICE_TYPE,
+            handlers=[self._listener],
+        )
 
     def stop(self) -> None:
         if self._zeroconf is None:
