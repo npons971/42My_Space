@@ -195,6 +195,9 @@ class FTMessageClient:
         verdict = await self._trust_peer(peer)
         if verdict == "mismatch":
             return
+        await self.events_queue.put(
+            f"{peer.login} en ligne ({peer.ip}:{peer.port})",
+        )
         flushed = await self.forwarding.on_peer_online(peer)
         if flushed:
             await self.events_queue.put(

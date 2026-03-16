@@ -87,7 +87,7 @@ def build_txt_properties(
 def parse_peer_from_service_info(info: ServiceInfo) -> Peer | None:
     props = info.properties or {}
     login = _decode_txt_value(props.get(b"login"))
-    ip = _decode_txt_value(props.get(b"ip"))
+    advertised_ip = _decode_txt_value(props.get(b"ip"))
     port_str = _decode_txt_value(props.get(b"port"))
     signing_key = (
         _decode_txt_value(props.get(b"sign_pubkey"))
@@ -95,7 +95,12 @@ def parse_peer_from_service_info(info: ServiceInfo) -> Peer | None:
     )
     encryption_key = _decode_txt_value(props.get(b"enc_pubkey"))
 
-    if not login or not ip or not port_str:
+    if not login or not port_str:
+        return None
+
+    parsed_addresses = info.parsed_addresses()
+    ip = parsed_addresses[0] if parsed_addresses else advertised_ip
+    if not ip:
         return None
 
     try:
@@ -225,7 +230,7 @@ class MdnsDiscovery:
         self._browser = ServiceBrowser(
             self._zeroconf,
             SERVICE_TYPE,
-            handlers=[self._listener],
+            listener=self._listener,
         )
 
     def stop(self) -> None:
