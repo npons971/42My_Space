@@ -1,0 +1,57 @@
+============================================================
+42msg Diagnostic Report
+Date: 2026-03-16T22:33:16+01:00
+Host: c2r8p6.42perpignan.fr
+User: nopons
+PWD : /home/nopons/42/Side/42My_Space
+============================================================
+
+[1] Versions
+- uname:
+Linux c2r8p6.42perpignan.fr 5.15.0-171-generic #181-Ubuntu SMP Fri Feb 6 22:44:50 UTC 2026 x86_64 GNU/Linux
+- python (venv):
+Python 3.13.1
+- python (system):
+Python 3.13.11
+
+[2] Réseau local (IP / routes / interfaces)
+- Aucun outil ip/ifconfig trouvé
+
+- Aucun outil ip/route trouvé
+
+- default route details: indisponible (ip absent)
+
+[3] Multicast / mDNS prérequis
+- route multicast: indisponible (ip/route absents)
+- socket 5353 listeners: indisponible (ss/netstat absents)
+- avahi-daemon status (if available):
+  systemctl/service non disponibles
+
+[4] Firewall (si disponible)
+
+[5] Inspection Python zeroconf
+ServiceBrowser signature:
+(self, zc: 'Zeroconf', type_: 'str | list', handlers: 'ServiceListener | list[Callable[..., None]] | None' = None, listener: 'ServiceListener | None' = None, addr: 'str | None' = None, port: 'int' = 5353, delay: 'int' = 10000, question_type: 'DNSQuestionType | None' = None) -> 'None'
+Detected local IP: 10.12.8.6
+Zeroconf started OK
+Zeroconf closed OK
+
+[6] Mini self-test mDNS (annonce + découverte locale)
+Starting MdnsDiscovery self-test...
+Self-test discovered peers count: 0
+Peers: []
+MdnsDiscovery self-test stopped
+
+[7] ftmsg runtime smoke (without TUI, 6s)
+Runtime peers count: 0
+Runtime peers: []
+EVENT: Node prêt: diag_runtime écoute sur 44259
+
+[8] Quick ping gateway
+No default gateway detected
+
+============================================================
+Diagnostic terminé
+Rapport: /home/nopons/42/Side/42My_Space/diagnostics/diag_c2r8p6.42perpignan.fr_20260316_223316.txt
+Partage ce fichier pour analyse
+============================================================
