@@ -1,5 +1,5 @@
 # My_Space/.gitignore
-test/
+tests/
 .gitignore
 
 # Byte-compiled / optimized / DLL files
