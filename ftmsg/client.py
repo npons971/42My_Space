@@ -37,6 +37,7 @@ class FTMessageClient:
         self.store = MessageStore(self.db_path)
         self.trust = TrustStore(self.db_path)
         self.forwarding = StoreAndForward(self.store, self.transport)
+        self.local_ip = os.environ.get("FTMSG_LOCAL_IP")
 
         self.discovery: MdnsDiscovery | None = None
         self.incoming_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
@@ -58,6 +59,7 @@ class FTMessageClient:
             encryption_key_b64=base64.b64encode(
                 bytes(self.enc_public_key),
             ).decode("utf-8"),
+            local_ip=self.local_ip,
             on_peer_online=self._on_peer_online_sync,
             on_peer_offline=self._on_peer_offline_sync,
         )

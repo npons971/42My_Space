@@ -7,7 +7,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from ipaddress import ip_address
 
-from zeroconf import ServiceBrowser, ServiceInfo, ServiceListener, Zeroconf
+from zeroconf import (
+    IPVersion,
+    ServiceBrowser,
+    ServiceInfo,
+    ServiceListener,
+    Zeroconf,
+)
 
 
 SERVICE_TYPE = "_42msg._tcp.local."
@@ -200,7 +206,13 @@ class MdnsDiscovery:
         if self._zeroconf is not None:
             return
 
-        self._zeroconf = Zeroconf()
+        try:
+            self._zeroconf = Zeroconf(
+                interfaces=[self.local_ip],
+                ip_version=IPVersion.V4Only,
+            )
+        except Exception:
+            self._zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
         properties = build_txt_properties(
             login=self.login,
             ip=self.local_ip,
