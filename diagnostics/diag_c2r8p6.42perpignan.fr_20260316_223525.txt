@@ -1,0 +1,83 @@
+============================================================
+42msg Diagnostic Report
+Date: 2026-03-16T22:35:25+01:00
+Host: c2r8p6.42perpignan.fr
+User: nopons
+PWD : /home/nopons/42/Side/42My_Space
+============================================================
+
+[1] Versions
+- uname:
+Linux c2r8p6.42perpignan.fr 5.15.0-171-generic #181-Ubuntu SMP Fri Feb 6 22:44:50 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+- python (venv):
+Python 3.13.1
+- python (system):
+Python 3.13.1
+
+[2] Réseau local (IP / routes / interfaces)
+- ip addr:
+lo               UNKNOWN        127.0.0.1/8 
+enp3s0f0         UP             10.12.8.6/16 metric 100 
+wlp2s0           DOWN           
+docker0          DOWN           172.17.0.1/16 
+virbr0           DOWN           192.168.122.1/24 
+
+- ip route:
+default via 10.12.254.254 dev enp3s0f0 proto dhcp src 10.12.8.6 metric 100 
+10.12.0.0/16 dev enp3s0f0 proto kernel scope link src 10.12.8.6 metric 100 
+10.12.254.254 dev enp3s0f0 proto dhcp scope link src 10.12.8.6 metric 100 
+10.51.1.253 via 10.12.254.254 dev enp3s0f0 proto dhcp src 10.12.8.6 metric 100 
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 linkdown 
+192.168.122.0/24 dev virbr0 proto kernel scope link src 192.168.122.1 linkdown 
+
+- default route details:
+8.8.8.8 via 10.12.254.254 dev enp3s0f0 src 10.12.8.6 uid 102255 
+    cache 
+
+[3] Multicast / mDNS prérequis
+- route multicast (224.0.0.0/4):
+- socket 5353 listeners (ss):
+UNCONN 0      0                 0.0.0.0:5353       0.0.0.0:*                                        
+UNCONN 0      0                    [::]:5353          [::]:*                                        
+- avahi-daemon status (if available):
+active
+
+[4] Firewall (si disponible)
+- ufw status:
+ERROR: You need to be root to run this script
+- nft ruleset (first 120 lines):
+- iptables -S (first 120 lines):
+
+[5] Inspection Python zeroconf
+ServiceBrowser signature:
+(self, zc: 'Zeroconf', type_: 'str | list', handlers: 'ServiceListener | list[Callable[..., None]] | None' = None, listener: 'ServiceListener | None' = None, addr: 'str | None' = None, port: 'int' = 5353, delay: 'int' = 10000, question_type: 'DNSQuestionType | None' = None) -> 'None'
+Detected local IP: 10.12.8.6
+Zeroconf started OK
+Zeroconf closed OK
+
+[6] Mini self-test mDNS (annonce + découverte locale)
+Starting MdnsDiscovery self-test...
+Self-test discovered peers count: 0
+Peers: []
+MdnsDiscovery self-test stopped
+
+[7] ftmsg runtime smoke (without TUI, 6s)
+Runtime peers count: 0
+Runtime peers: []
+EVENT: Node prêt: diag_runtime écoute sur 45593
+
+[8] Quick ping gateway
+Gateway: 10.12.254.254
+PING 10.12.254.254 (10.12.254.254) 56(84) bytes of data.
+64 bytes from 10.12.254.254: icmp_seq=1 ttl=255 time=0.645 ms
+64 bytes from 10.12.254.254: icmp_seq=2 ttl=255 time=0.669 ms
+
+--- 10.12.254.254 ping statistics ---
+2 packets transmitted, 2 received, 0% packet loss, time 1015ms
+rtt min/avg/max/mdev = 0.645/0.657/0.669/0.012 ms
+
+============================================================
+Diagnostic terminé
+Rapport: /home/nopons/42/Side/42My_Space/diagnostics/diag_c2r8p6.42perpignan.fr_20260316_223525.txt
+Partage ce fichier pour analyse
+============================================================

@@ -66,6 +66,25 @@ L'autre personne décompresse, puis lance `./install.sh`.
 - Le pare-feu local doit autoriser les connexions TCP entrantes sur le port dynamique choisi.
 - L'envoi peut passer en `pending` si la cible est hors ligne, puis partir automatiquement à son retour.
 
+## Debug mDNS en direct (2 machines)
+
+Si vous ne vous voyez pas dans `/peers`, lancez ce test en même temps sur les 2 machines:
+
+Machine A:
+
+```bash
+.venv/bin/python live_mdns_check.py --login login_A --duration 60
+```
+
+Machine B:
+
+```bash
+.venv/bin/python live_mdns_check.py --login login_B --duration 60
+```
+
+Résultat attendu: chaque machine doit afficher des lignes `ONLINE login=...` et des snapshots avec l'autre login.
+Si les 2 scripts affichent `RESULT: no peer discovered`, c'est presque toujours un filtrage multicast/mDNS sur le réseau (VLAN/switch/ACL).
+
 ## Sécurité implémentée
 
 - Chiffrement E2EE par message (PyNaCl/Curve25519).
