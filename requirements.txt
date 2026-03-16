@@ -1,0 +1,5 @@
+zeroconf
+pynacl
+aiosqlite
+textual
+pytest
