@@ -111,6 +111,64 @@ Si le réseau bloque mDNS, vous pouvez forcer la liaison pair à pair.
 
 Le handshake `/link` est signé, met à jour le TOFU local, et permet ensuite l'envoi chiffré normal.
 
+## Diagnostic direct pair-à-pair
+
+Pour vérifier si deux postes peuvent réellement se parler en direct:
+
+```bash
+./diag_peer.sh IP_AMI PORT_AMI
+```
+
+Exemple:
+
+```bash
+./diag_peer.sh 10.12.8.7 35000
+```
+
+Si le test TCP échoue des deux côtés, le réseau bloque le trafic poste-à-poste.
+
+## Tunnels SSH automatisés (sans sudo)
+
+Si vous avez un hôte pivot SSH commun, utilisez le script:
+
+```bash
+./scripts/tunnel_session.sh \
+	--pivot user@pivot.42.fr \
+	--my-port MON_PORT_42MSG \
+	--publish-port 4500X \
+	--peer-publish-port 4500Y \
+	--peer-local-port 5500Y \
+	--peer-login login_ami
+```
+
+### Exemple concret (A et B)
+
+- Machine A (ton ami publie `45001`, A publie `45002`):
+
+```bash
+./scripts/tunnel_session.sh \
+	--pivot user@pivot.42.fr \
+	--my-port PORT_A \
+	--publish-port 45002 \
+	--peer-publish-port 45001 \
+	--peer-local-port 55001 \
+	--peer-login login_B
+```
+
+- Machine B:
+
+```bash
+./scripts/tunnel_session.sh \
+	--pivot user@pivot.42.fr \
+	--my-port PORT_B \
+	--publish-port 45001 \
+	--peer-publish-port 45002 \
+	--peer-local-port 55002 \
+	--peer-login login_A
+```
+
+Le script affiche ensuite la commande `/link ...` à coller dans votre TUI.
+
 ## Sécurité implémentée
 
 - Chiffrement E2EE par message (PyNaCl/Curve25519).

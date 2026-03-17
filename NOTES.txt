@@ -1,0 +1,13 @@
+Utilisation (sur chaque machine, avec paramètres inversés A/B) :
+
+Lancer 42msg --login ... et noter PORT_A / PORT_B.
+Puis lancer le script tunnel_session.sh avec le pivot.
+Le script te donne directement la commande /link ... à coller dans le TUI.
+Garde le terminal du script ouvert pendant la discussion.
+Si tu veux, je peux te donner maintenant les deux commandes exactes remplies (A et B) si tu me donnes juste:
+
+user@pivot
+PORT_A
+PORT_B
+login_A
+login_B
