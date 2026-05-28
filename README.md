@@ -33,8 +33,6 @@ Aucun package n'est installé globalement sur le système.
 | `make fclean` | `make clean` + suppression des données utilisateur (`~/.42msg`) |
 | `make re` | `make clean` + `make install` |
 
-**Note:** `install.sh` ne doit pas être exécuté directement ; il est appelé par `make install`.
-
 ## Commandes
 
 | Commande | Description |
