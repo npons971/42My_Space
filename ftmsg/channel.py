@@ -62,6 +62,7 @@ class ChannelServer:
         self.on_member_leave = on_member_leave
 
         self._clients: dict[str, asyncio.StreamWriter] = {}
+        self._member_keys: dict[str, str] = {}
         self._last_activity: dict[str, float] = {}
         self._rate_limits: dict[str, list[float]] = {}
         self._server: asyncio.AbstractServer | None = None
@@ -97,6 +98,7 @@ class ChannelServer:
                 except Exception:
                     logger.debug("close writer failed for %s", login, exc_info=True)
         self._clients.clear()
+        self._member_keys.clear()
         self._last_activity.clear()
         self._rate_limits.clear()
         if self._server:
@@ -114,6 +116,17 @@ class ChannelServer:
                 await write_frame(writer, frame)
             except Exception:
                 logger.debug("broadcast to %s failed", login, exc_info=True)
+
+    async def send_to(self, login: str, frame: Frame) -> bool:
+        writer = self._clients.get(login)
+        if writer is None:
+            return False
+        try:
+            await write_frame(writer, frame)
+            return True
+        except Exception:
+            logger.debug("send_to %s failed", login, exc_info=True)
+            return False
 
     async def local_message(self, sender_login: str, payload: str) -> bool:
         if not self._check_rate_limit(sender_login):
@@ -214,6 +227,7 @@ class ChannelServer:
 
             login = str(join_frame.get("login", ""))
             password = str(join_frame.get("password", ""))
+            enc_pubkey = str(join_frame.get("encryption_pubkey_b64", ""))
 
             err = validate_login(login)
             if err:
@@ -237,6 +251,8 @@ class ChannelServer:
                 return
 
             self._clients[login] = writer
+            if enc_pubkey:
+                self._member_keys[login] = enc_pubkey
             self._last_activity[login] = time.time()
 
             members = list(self._clients.keys())
@@ -244,6 +260,7 @@ class ChannelServer:
                 "type": "JOIN_ACCEPTED",
                 "channel_name": self.name,
                 "members": members,
+                "member_keys": dict(self._member_keys),
             })
 
             await self.broadcast({"type": "USER_JOINED", "login": login}, exclude=login)
@@ -259,6 +276,16 @@ class ChannelServer:
                     break
                 if ftype == "PONG":
                     continue
+                if ftype == "ROOM_KEY":
+                    target = str(frame.get("target_login", ""))
+                    if target and target in self._clients:
+                        target_writer = self._clients[target]
+                        if target_writer is not None:
+                            try:
+                                await write_frame(target_writer, frame)
+                            except Exception:
+                                logger.debug("ROOM_KEY routing failed for %s", target, exc_info=True)
+                    continue
                 if ftype == "MESSAGE":
                     if not self._check_rate_limit(login):
                         try:
@@ -268,15 +295,20 @@ class ChannelServer:
                         continue
                     now = time.time()
                     payload = str(frame.get("payload", ""))
+                    payload_enc = str(frame.get("payload_encrypted", ""))
                     msg_frame: Frame = {
                         "type": "MESSAGE",
                         "sender_login": login,
-                        "payload": payload,
                         "timestamp": now,
                     }
+                    if payload_enc:
+                        msg_frame["payload_encrypted"] = payload_enc
+                    else:
+                        msg_frame["payload"] = payload
                     await self.broadcast(msg_frame, exclude=login)
+                    display = payload if payload else "[encrypted]"
                     if self.on_message:
-                        self.on_message(login, payload, now)
+                        self.on_message(login, display, now)
 
         except (asyncio.IncompleteReadError, ConnectionError, OSError, TimeoutError):
             pass
@@ -303,17 +335,20 @@ class ChannelClient:
         on_member_join: Callable[[str], None] | None = None,
         on_member_leave: Callable[[str], None] | None = None,
         on_disconnect: Callable[[str], None] | None = None,
+        on_room_key: Callable[[str], None] | None = None,
     ) -> None:
         self.login = login
         self.on_message = on_message
         self.on_member_join = on_member_join
         self.on_member_leave = on_member_leave
         self.on_disconnect = on_disconnect
+        self.on_room_key = on_room_key
 
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
         self.channel_name: str = ""
         self.members: list[str] = []
+        self.member_keys: dict[str, str] = {}
         self._connected = False
         self._read_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -321,6 +356,7 @@ class ChannelClient:
 
     async def connect(
         self, host: str, port: int, password: str, login: str,
+        encryption_pubkey_b64: str = "",
     ) -> tuple[str, str]:
         err = validate_login(login)
         if err:
@@ -352,9 +388,12 @@ class ChannelClient:
             if info.get("type") != "CHANNEL_INFO":
                 return "protocol_error", "expected CHANNEL_INFO"
 
-            await write_frame(self.writer, {
+            join_frame: Frame = {
                 "type": "JOIN", "login": login, "password": password,
-            })
+            }
+            if encryption_pubkey_b64:
+                join_frame["encryption_pubkey_b64"] = encryption_pubkey_b64
+            await write_frame(self.writer, join_frame)
 
             response = await asyncio.wait_for(
                 read_frame(self.reader), timeout=5.0,
@@ -370,6 +409,7 @@ class ChannelClient:
 
             self.channel_name = str(response.get("channel_name", ""))
             self.members = list(response.get("members", []))
+            self.member_keys = dict(response.get("member_keys", {}))
             self._connected = True
             self._last_server_frame = time.time()
             self._read_task = asyncio.create_task(self._read_loop())
@@ -417,6 +457,20 @@ class ChannelClient:
             self._connected = False
             return False
 
+    async def send_room_key(self, target_login: str, encrypted_key: str) -> bool:
+        if not self._connected or not self.writer:
+            return False
+        try:
+            await write_frame(self.writer, {
+                "type": "ROOM_KEY",
+                "target_login": target_login,
+                "encrypted_key": encrypted_key,
+            })
+            return True
+        except (OSError, ConnectionError):
+            self._connected = False
+            return False
+
     async def _read_loop(self) -> None:
         try:
             while self._connected and self.reader:
@@ -427,9 +481,11 @@ class ChannelClient:
                 if ftype == "MESSAGE":
                     sender = str(frame.get("sender_login", ""))
                     payload = str(frame.get("payload", ""))
+                    payload_enc = str(frame.get("payload_encrypted", ""))
                     ts = float(frame.get("timestamp", time.time()))
+                    display = payload if payload else payload_enc
                     if self.on_message and sender:
-                        self.on_message(sender, payload, ts)
+                        self.on_message(sender, display, ts)
 
                 elif ftype == "USER_JOINED":
                     login = str(frame.get("login", ""))
@@ -462,6 +518,11 @@ class ChannelClient:
                     retry = int(frame.get("retry_after", 10))
                     if self.on_message:
                         self.on_message("", f"[Rate limit: wait {retry}s]", time.time())
+
+                elif ftype == "ROOM_KEY":
+                    encrypted_key = str(frame.get("encrypted_key", ""))
+                    if encrypted_key and self.on_room_key:
+                        self.on_room_key(encrypted_key)
 
                 else:
                     pass

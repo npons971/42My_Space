@@ -7,6 +7,7 @@ from typing import Union
 
 from nacl import utils
 from nacl.public import Box, PrivateKey, PublicKey
+from nacl.secret import SecretBox
 
 
 KeyLike = Union[bytes, str, PublicKey, PrivateKey]
@@ -91,3 +92,22 @@ def decrypt(payload: str, my_private_key: KeyLike) -> bytes:
 
     box = Box(private_key, sender_pub_key)
     return box.decrypt(ciphertext, nonce)
+
+
+def encrypt_symmetric(plaintext: str, key: bytes) -> str:
+    box = SecretBox(key)
+    data = plaintext.encode("utf-8")
+    nonce = utils.random(SecretBox.NONCE_SIZE)
+    encrypted = box.encrypt(data, nonce)
+    return base64.b64encode(encrypted).decode("utf-8")
+
+
+def decrypt_symmetric(ciphertext: str, key: bytes) -> str:
+    box = SecretBox(key)
+    data = base64.b64decode(ciphertext.encode("utf-8"))
+    decrypted = box.decrypt(data)
+    return decrypted.decode("utf-8")
+
+
+def generate_room_key() -> bytes:
+    return utils.random(SecretBox.KEY_SIZE)

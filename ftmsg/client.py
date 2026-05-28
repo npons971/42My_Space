@@ -7,7 +7,14 @@ import time
 from pathlib import Path
 
 from .channel import ChannelClient, ChannelServer
-from .crypto import generate_or_load_encryption_keypair
+from .crypto import (
+    decrypt,
+    encrypt,
+    encrypt_symmetric,
+    decrypt_symmetric,
+    generate_or_load_encryption_keypair,
+    generate_room_key,
+)
 from .discovery import BroadcastDiscovery, ChannelInfo, DiscoveredChannel
 from .security import generate_or_load_signing_keypair
 from .store import MessageStore
@@ -36,6 +43,7 @@ class FTMessageClient:
         self.channel_server: ChannelServer | None = None
         self.channel_client: ChannelClient | None = None
         self.is_hosting = False
+        self.room_key: bytes | None = None
 
         self.incoming_queue: asyncio.Queue[tuple[str, str, float]] = asyncio.Queue(maxsize=1000)
         self.events_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=500)
@@ -78,15 +86,40 @@ class FTMessageClient:
     def _on_msg_cb(self, channel_name: str) -> Callable[[str, str, float], None]:
         def on_msg(sender: str, payload: str, ts: float) -> None:
             if self._loop:
+                # Decrypt if room_key available and payload looks encrypted
+                decrypted = payload
+                if self.room_key and payload.startswith("ENCRYPTED:"):
+                    try:
+                        ciphertext = payload[len("ENCRYPTED:"):]
+                        decrypted = decrypt_symmetric(ciphertext, self.room_key)
+                    except Exception:
+                        decrypted = "[déchiffrement échoué]"
                 asyncio.run_coroutine_threadsafe(
-                    self.incoming_queue.put((sender, payload, ts)),
+                    self.incoming_queue.put((sender, decrypted, ts)),
                     self._loop,
                 )
                 asyncio.run_coroutine_threadsafe(
-                    self.store.add_channel_message(channel_name, sender, payload, ts),
+                    self.store.add_channel_message(channel_name, sender, decrypted, ts),
                     self._loop,
                 )
         return on_msg
+
+    def _encrypt_and_send_room_key(self, login: str, pubkey_b64: str) -> None:
+        if not self.room_key or not self.channel_server:
+            return
+        try:
+            encrypted_key = encrypt(self.room_key, pubkey_b64)
+            frame = {
+                "type": "ROOM_KEY",
+                "target_login": login,
+                "encrypted_key": encrypted_key,
+            }
+            asyncio.run_coroutine_threadsafe(
+                self.channel_server.send_to(login, frame),
+                self._loop,
+            )
+        except Exception:
+            logger.debug("room key encryption failed for %s", login, exc_info=True)
 
     async def create_channel(
         self, name: str, password: str, max_users: int, is_public: bool,
@@ -95,6 +128,7 @@ class FTMessageClient:
             return "already_in_channel"
 
         local_ip = self._resolve_local_ip()
+        self.room_key = generate_room_key()
 
         def _update_beacon() -> None:
             if self.discovery and self.channel_server:
@@ -115,6 +149,9 @@ class FTMessageClient:
                     self.events_queue.put(f"{login} a rejoint le salon"),
                     self._loop,
                 )
+            # Send room key if we know the member's pubkey
+            if self.channel_server and login in self.channel_server._member_keys:
+                self._encrypt_and_send_room_key(login, self.channel_server._member_keys[login])
 
         def on_leave(login: str) -> None:
             _update_beacon()
@@ -184,15 +221,34 @@ class FTMessageClient:
                 )
             self.channel_client = None
 
+        def on_room_key(encrypted_key: str) -> None:
+            try:
+                raw = decrypt(encrypted_key, self.enc_private_key)
+                self.room_key = raw
+                if self._loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self.events_queue.put("Clé de salon reçue — messages chiffrés"),
+                        self._loop,
+                    )
+            except Exception:
+                if self._loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self.events_queue.put("⚠️ Impossible de déchiffrer la clé de salon"),
+                        self._loop,
+                    )
+
         self.channel_client = ChannelClient(
             login=self.login,
             on_member_join=on_join,
             on_member_leave=on_leave,
             on_disconnect=on_disc,
+            on_room_key=on_room_key,
         )
 
+        my_pubkey = base64.b64encode(bytes(self.enc_public_key)).decode("utf-8")
         status, detail = await self.channel_client.connect(
             host_ip, host_port, password, self.login,
+            encryption_pubkey_b64=my_pubkey,
         )
 
         if status != "connected":
@@ -213,6 +269,7 @@ class FTMessageClient:
         return "connected", detail
 
     async def leave_channel(self) -> None:
+        self.room_key = None
         if self.channel_client:
             await self.channel_client.disconnect()
             self.channel_client = None
@@ -228,14 +285,22 @@ class FTMessageClient:
             await self.events_queue.put("Salon fermé")
 
     async def send_channel_message(self, message: str) -> str:
+        payload = message
+        if self.room_key:
+            try:
+                encrypted = encrypt_symmetric(message, self.room_key)
+                payload = f"ENCRYPTED:{encrypted}"
+            except Exception:
+                return "encryption_failed"
+
         if self.channel_server:
-            ok = await self.channel_server.local_message(self.login, message)
+            ok = await self.channel_server.local_message(self.login, payload)
             if ok:
                 return "sent"
             return "rate_limited"
 
         if self.channel_client and self.channel_client._connected:
-            ok = await self.channel_client.send_message(message)
+            ok = await self.channel_client.send_message(payload)
             if ok:
                 await self.incoming_queue.put((self.login, message, time.time()))
                 return "sent"
