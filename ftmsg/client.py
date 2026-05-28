@@ -75,6 +75,19 @@ class FTMessageClient:
         except OSError:
             return "127.0.0.1"
 
+    def _on_msg_cb(self, channel_name: str) -> Callable[[str, str, float], None]:
+        def on_msg(sender: str, payload: str, ts: float) -> None:
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.incoming_queue.put((sender, payload, ts)),
+                    self._loop,
+                )
+                asyncio.run_coroutine_threadsafe(
+                    self.store.add_channel_message(channel_name, sender, payload, ts),
+                    self._loop,
+                )
+        return on_msg
+
     async def create_channel(
         self, name: str, password: str, max_users: int, is_public: bool,
     ) -> str:
@@ -82,13 +95,6 @@ class FTMessageClient:
             return "already_in_channel"
 
         local_ip = self._resolve_local_ip()
-
-        def on_msg(sender: str, payload: str, ts: float) -> None:
-            if self._loop:
-                asyncio.run_coroutine_threadsafe(
-                    self.incoming_queue.put((sender, payload, ts)),
-                    self._loop,
-                )
 
         def _update_beacon() -> None:
             if self.discovery and self.channel_server:
@@ -124,7 +130,7 @@ class FTMessageClient:
             max_users=max_users,
             is_public=is_public,
             owner_login=self.login,
-            on_message=on_msg,
+            on_message=self._on_msg_cb(name),
             on_member_join=on_join,
             on_member_leave=on_leave,
         )
@@ -156,13 +162,6 @@ class FTMessageClient:
         if self.channel_server or self.channel_client:
             return "already_in_channel", ""
 
-        def on_msg(sender: str, payload: str, ts: float) -> None:
-            if self._loop:
-                asyncio.run_coroutine_threadsafe(
-                    self.incoming_queue.put((sender, payload, ts)),
-                    self._loop,
-                )
-
         def on_join(login: str) -> None:
             if self._loop:
                 asyncio.run_coroutine_threadsafe(
@@ -187,7 +186,6 @@ class FTMessageClient:
 
         self.channel_client = ChannelClient(
             login=self.login,
-            on_message=on_msg,
             on_member_join=on_join,
             on_member_leave=on_leave,
             on_disconnect=on_disc,
@@ -200,6 +198,14 @@ class FTMessageClient:
         if status != "connected":
             self.channel_client = None
             return status, detail
+
+        channel_name = self.channel_client.channel_name
+        self.channel_client.on_message = self._on_msg_cb(channel_name)
+
+        # Load history
+        history = await self.store.list_channel_messages(channel_name, limit=20)
+        for sender, payload, ts in history:
+            await self.incoming_queue.put((sender, payload, ts))
 
         await self.events_queue.put(
             f"Connecté au salon '{detail}' ({host_ip}:{host_port})",
@@ -223,8 +229,10 @@ class FTMessageClient:
 
     async def send_channel_message(self, message: str) -> str:
         if self.channel_server:
-            await self.channel_server.local_message(self.login, message)
-            return "sent"
+            ok = await self.channel_server.local_message(self.login, message)
+            if ok:
+                return "sent"
+            return "rate_limited"
 
         if self.channel_client and self.channel_client._connected:
             ok = await self.channel_client.send_message(message)

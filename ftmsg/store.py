@@ -43,6 +43,17 @@ class MessageStore:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_name TEXT NOT NULL,
+                    sender_login TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    timestamp REAL NOT NULL
+                )
+                """
+            )
             await db.commit()
 
     async def add_pending(
@@ -107,3 +118,20 @@ class MessageStore:
                 (error, message_id),
             )
             await db.commit()
+
+    async def add_channel_message(self, channel_name: str, sender_login: str, payload: str, timestamp: float) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO channel_messages (channel_name, sender_login, payload, timestamp) VALUES (?, ?, ?, ?)",
+                (channel_name, sender_login, payload, timestamp),
+            )
+            await db.commit()
+
+    async def list_channel_messages(self, channel_name: str, limit: int = 50) -> list[tuple[str, str, float]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT sender_login, payload, timestamp FROM channel_messages WHERE channel_name = ? ORDER BY timestamp DESC LIMIT ?",
+                (channel_name, limit),
+            )
+            rows = await cursor.fetchall()
+        return [(row[0], row[1], row[2]) for row in reversed(rows)]

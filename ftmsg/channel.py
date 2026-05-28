@@ -115,7 +115,9 @@ class ChannelServer:
             except Exception:
                 logger.debug("broadcast to %s failed", login, exc_info=True)
 
-    async def local_message(self, sender_login: str, payload: str) -> None:
+    async def local_message(self, sender_login: str, payload: str) -> bool:
+        if not self._check_rate_limit(sender_login):
+            return False
         now = time.time()
         frame: Frame = {
             "type": "MESSAGE",
@@ -126,6 +128,7 @@ class ChannelServer:
         await self.broadcast(frame, exclude=sender_login)
         if self.on_message:
             self.on_message(sender_login, payload, now)
+        return True
 
     def member_count(self) -> int:
         return len(self._clients)
@@ -258,6 +261,10 @@ class ChannelServer:
                     continue
                 if ftype == "MESSAGE":
                     if not self._check_rate_limit(login):
+                        try:
+                            await write_frame(writer, {"type": "RATE_LIMITED", "retry_after": int(RATE_LIMIT_WINDOW)})
+                        except Exception:
+                            pass
                         continue
                     now = time.time()
                     payload = str(frame.get("payload", ""))
@@ -450,6 +457,11 @@ class ChannelClient:
                         await write_frame(self.writer, {"type": "PONG"})
                     except Exception:
                         logger.debug("send PONG failed", exc_info=True)
+
+                elif ftype == "RATE_LIMITED":
+                    retry = int(frame.get("retry_after", 10))
+                    if self.on_message:
+                        self.on_message("", f"[Rate limit: wait {retry}s]", time.time())
 
                 else:
                     pass
