@@ -1,4 +1,3 @@
-zeroconf
 pynacl
 aiosqlite
 textual

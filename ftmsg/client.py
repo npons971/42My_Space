@@ -2,21 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import time
 from pathlib import Path
 
-from .crypto import decrypt, encrypt, generate_or_load_encryption_keypair
-from .discovery import MdnsDiscovery, Peer
-from .forwarding import StoreAndForward
-from .security import (
-    generate_or_load_signing_keypair,
-    sign_frame,
-    verify_frame_signature,
-)
+from .channel import ChannelClient, ChannelServer
+from .crypto import generate_or_load_encryption_keypair
+from .discovery import BroadcastDiscovery, ChannelInfo, DiscoveredChannel
+from .security import generate_or_load_signing_keypair
 from .store import MessageStore
-from .transport import AsyncTransport
 from .trust import TrustStore
 
 
@@ -34,16 +28,16 @@ class FTMessageClient:
             self.sign_public_key,
         ) = generate_or_load_signing_keypair()
 
-        self.transport = AsyncTransport(on_frame=self._on_frame)
         self.store = MessageStore(self.db_path)
         self.trust = TrustStore(self.db_path)
-        self.forwarding = StoreAndForward(self.store, self.transport)
         self.local_ip = os.environ.get("FTMSG_LOCAL_IP")
-        self.listen_port: int | None = None
-        self._manual_peers: dict[str, Peer] = {}
 
-        self.discovery: MdnsDiscovery | None = None
-        self.incoming_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self.discovery: BroadcastDiscovery | None = None
+        self.channel_server: ChannelServer | None = None
+        self.channel_client: ChannelClient | None = None
+        self.is_hosting = False
+
+        self.incoming_queue: asyncio.Queue[tuple[str, str, float]] = asyncio.Queue()
         self.events_queue: asyncio.Queue[str] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -52,268 +46,220 @@ class FTMessageClient:
         await self.store.init()
         await self.trust.init()
 
-        listen_port = await self.transport.start()
-        self.listen_port = listen_port
-        self.discovery = MdnsDiscovery(
-            login=self.login,
-            listen_port=listen_port,
-            signing_key_b64=base64.b64encode(
-                bytes(self.sign_public_key),
-            ).decode("utf-8"),
-            encryption_key_b64=base64.b64encode(
-                bytes(self.enc_public_key),
-            ).decode("utf-8"),
-            local_ip=self.local_ip,
-            on_peer_online=self._on_peer_online_sync,
-            on_peer_offline=self._on_peer_offline_sync,
+        self.discovery = BroadcastDiscovery(
+            on_channel=self._on_channel_discovered_sync,
         )
+        self.discovery.local_ip = self._resolve_local_ip()
         await asyncio.to_thread(self.discovery.start)
-        await self.events_queue.put(
-            f"Node prêt: {self.login} écoute sur {listen_port}",
-        )
+        await self.events_queue.put("Client prêt. Tape /help pour les commandes.")
 
     async def stop(self) -> None:
-        if self.discovery is not None:
+        await self.leave_channel()
+        if self.discovery:
             await asyncio.to_thread(self.discovery.stop)
-        await self.transport.stop()
 
-    async def send_message(self, target_login: str, message: str) -> str:
-        peer = self._known_peer(target_login)
+    def _resolve_local_ip(self) -> str:
+        if self.local_ip:
+            return self.local_ip
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1.0)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except OSError:
+            return "127.0.0.1"
 
-        if peer is not None:
-            await self._trust_peer(peer)
-            encryption_pubkey = peer.encryption_key_b64
-        else:
-            identity = await self.trust.get_identity(target_login)
-            encryption_pubkey = (
-                identity.encryption_pubkey if identity else None
-            )
-
-        if not encryption_pubkey:
-            return "unknown_peer"
-
-        payload = encrypt(message, encryption_pubkey)
-        frame = {
-            "sender_login": self.login,
-            "timestamp": int(time.time()),
-            "type": "MESSAGE",
-            "payload": payload,
-        }
-        frame["signature"] = sign_frame(frame, self.sign_private_key)
-        return await self.forwarding.send_or_queue(
-            target_login=target_login,
-            frame=frame,
-            peer=peer,
-        )
-
-    def list_online_peers(self) -> dict[str, Peer]:
-        peers = dict(self._manual_peers)
-        if self.discovery is not None:
-            peers.update(self.discovery.online_peers())
-        return peers
-
-    async def link_peer(
-        self,
-        target_login: str,
-        target_ip: str,
-        target_port: int,
+    async def create_channel(
+        self, name: str, password: str, max_users: int, is_public: bool,
     ) -> str:
-        if self.listen_port is None:
-            return "not_started"
+        if self.channel_server or self.channel_client:
+            return "already_in_channel"
 
-        frame = self._make_hello_frame("HELLO")
-        sent = await self.transport.send_frame(target_ip, target_port, frame)
-        if not sent:
-            return "connect_failed"
+        local_ip = self._resolve_local_ip()
 
-        self._manual_peers[target_login] = Peer(
-            login=target_login,
-            ip=target_ip,
-            port=target_port,
-            last_seen=time.time(),
-        )
-        return "link_sent"
-
-    async def _on_frame(self, frame: dict, sender_ip: str) -> None:
-        frame_type = frame.get("type")
-        if frame_type in {"HELLO", "HELLO_ACK"}:
-            await self._handle_hello(frame, sender_ip)
-            return
-
-        if frame_type != "MESSAGE":
-            return
-
-        sender_login = frame.get("sender_login")
-        if not sender_login or not isinstance(sender_login, str):
-            return
-
-        identity = await self.trust.get_identity(sender_login)
-        if identity is None:
-            peer = self._known_peer(sender_login)
-            if (
-                peer is None
-                or not peer.signing_key_b64
-                or not peer.encryption_key_b64
-            ):
-                await self.events_queue.put(
-                    "Message rejeté: identité TOFU "
-                    f"inconnue pour {sender_login}",
+        def on_msg(sender: str, payload: str, ts: float) -> None:
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.incoming_queue.put((sender, payload, ts)),
+                    self._loop,
                 )
-                return
-            verdict = await self.trust.observe_peer(
-                sender_login,
-                peer.signing_key_b64,
-                peer.encryption_key_b64,
-            )
-            if verdict == "mismatch":
-                await self.events_queue.put(
-                    "Alerte TOFU: tentative d'usurpation "
-                    f"pour {sender_login}",
+
+        def _update_beacon() -> None:
+            if self.discovery and self.channel_server:
+                info = ChannelInfo(
+                    name=name,
+                    host_ip=local_ip,
+                    host_port=port,
+                    is_public=is_public,
+                    user_count=self.channel_server.member_count(),
+                    max_users=max_users,
                 )
-                return
-            identity = await self.trust.get_identity(sender_login)
-            if identity is None:
-                return
+                self.discovery.update_beacon(info)
 
-        if not verify_frame_signature(frame, identity.signing_pubkey):
-            await self.events_queue.put(
-                f"Message rejeté: signature invalide de {sender_login}",
-            )
-            return
+        def on_join(login: str) -> None:
+            _update_beacon()
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.events_queue.put(f"{login} a rejoint le salon"),
+                    self._loop,
+                )
 
-        try:
-            clear = decrypt(
-                frame["payload"],
-                self.enc_private_key,
-            ).decode("utf-8", errors="replace")
-        except Exception:
-            await self.events_queue.put(
-                f"Message rejeté: payload invalide de {sender_login}",
-            )
-            return
+        def on_leave(login: str) -> None:
+            _update_beacon()
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.events_queue.put(f"{login} a quitté le salon"),
+                    self._loop,
+                )
 
-        await self.incoming_queue.put((sender_login, clear))
-
-    async def _trust_peer(self, peer: Peer) -> str:
-        if not peer.signing_key_b64 or not peer.encryption_key_b64:
-            return "missing_keys"
-        verdict = await self.trust.observe_peer(
-            peer.login,
-            peer.signing_key_b64,
-            peer.encryption_key_b64,
-        )
-        if verdict == "mismatch":
-            await self.events_queue.put(
-                "Alerte TOFU: tentative d'usurpation "
-                f"détectée pour {peer.login}",
-            )
-        return verdict
-
-    def _on_peer_online_sync(self, peer: Peer) -> None:
-        if self._loop is None:
-            return
-        asyncio.run_coroutine_threadsafe(
-            self._on_peer_online(peer),
-            self._loop,
+        self.channel_server = ChannelServer(
+            name=name,
+            password=password,
+            max_users=max_users,
+            is_public=is_public,
+            owner_login=self.login,
+            on_message=on_msg,
+            on_member_join=on_join,
+            on_member_leave=on_leave,
         )
 
-    async def _on_peer_online(self, peer: Peer) -> None:
-        verdict = await self._trust_peer(peer)
-        if verdict == "mismatch":
-            return
+        port = await self.channel_server.start(port=0)
+        self.is_hosting = True
+
+        info = ChannelInfo(
+            name=name,
+            host_ip=local_ip,
+            host_port=port,
+            is_public=is_public,
+            user_count=1,
+            max_users=max_users,
+        )
+        if self.discovery:
+            self.discovery.start_beaconing(info)
+            _update_beacon()
+
         await self.events_queue.put(
-            f"{peer.login} en ligne ({peer.ip}:{peer.port})",
+            f"Salon '{name}' créé sur {local_ip}:{port} "
+            f"(max {max_users}, {'public' if is_public else 'privé'})",
         )
-        flushed = await self.forwarding.on_peer_online(peer)
-        if flushed:
-            await self.events_queue.put(
-                f"{flushed} message(s) pending envoyé(s) à {peer.login}",
-            )
+        return "created"
 
-    def _on_peer_offline_sync(self, login: str) -> None:
-        if self._loop is None:
-            return
-        asyncio.run_coroutine_threadsafe(
-            self.events_queue.put(f"{login} est hors ligne"),
-            self._loop,
+    async def join_channel(
+        self, host_ip: str, host_port: int, password: str,
+    ) -> str:
+        if self.channel_server or self.channel_client:
+            return "already_in_channel"
+
+        def on_msg(sender: str, payload: str, ts: float) -> None:
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.incoming_queue.put((sender, payload, ts)),
+                    self._loop,
+                )
+
+        def on_join(login: str) -> None:
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.events_queue.put(f"{login} a rejoint le salon"),
+                    self._loop,
+                )
+
+        def on_leave(login: str) -> None:
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.events_queue.put(f"{login} a quitté le salon"),
+                    self._loop,
+                )
+
+        def on_disc(reason: str) -> None:
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.events_queue.put(f"Déconnecté du salon: {reason}"),
+                    self._loop,
+                )
+            self.channel_client = None
+
+        self.channel_client = ChannelClient(
+            login=self.login,
+            on_message=on_msg,
+            on_member_join=on_join,
+            on_member_leave=on_leave,
+            on_disconnect=on_disc,
         )
 
-    def _known_peer(self, login: str) -> Peer | None:
-        if login in self._manual_peers:
-            return self._manual_peers[login]
-        if self.discovery is None:
-            return None
-        return self.discovery.online_peers().get(login)
-
-    def _make_hello_frame(self, frame_type: str) -> dict:
-        payload = {
-            "listen_port": self.listen_port,
-            "signing_pubkey": base64.b64encode(
-                bytes(self.sign_public_key),
-            ).decode("utf-8"),
-            "encryption_pubkey": base64.b64encode(
-                bytes(self.enc_public_key),
-            ).decode("utf-8"),
-        }
-        frame = {
-            "sender_login": self.login,
-            "timestamp": int(time.time()),
-            "type": frame_type,
-            "payload": json.dumps(payload, separators=(",", ":")),
-        }
-        frame["signature"] = sign_frame(frame, self.sign_private_key)
-        return frame
-
-    async def _handle_hello(self, frame: dict, sender_ip: str) -> None:
-        sender_login = frame.get("sender_login")
-        if not sender_login or not isinstance(sender_login, str):
-            return
-
-        try:
-            payload = json.loads(frame.get("payload", "{}"))
-            listen_port = int(payload["listen_port"])
-            signing_pubkey = str(payload["signing_pubkey"])
-            encryption_pubkey = str(payload["encryption_pubkey"])
-        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
-            await self.events_queue.put(
-                f"HELLO rejeté: payload invalide de {sender_login}",
-            )
-            return
-
-        if not verify_frame_signature(frame, signing_pubkey):
-            await self.events_queue.put(
-                f"HELLO rejeté: signature invalide de {sender_login}",
-            )
-            return
-
-        verdict = await self.trust.observe_peer(
-            sender_login,
-            signing_pubkey,
-            encryption_pubkey,
+        status, detail = await self.channel_client.connect(
+            host_ip, host_port, password, self.login,
         )
-        if verdict == "mismatch":
-            await self.events_queue.put(
-                "Alerte TOFU: tentative d'usurpation "
-                f"détectée pour {sender_login}",
-            )
-            return
 
-        self._manual_peers[sender_login] = Peer(
-            login=sender_login,
-            ip=sender_ip,
-            port=listen_port,
-            signing_key_b64=signing_pubkey,
-            encryption_key_b64=encryption_pubkey,
-            last_seen=time.time(),
-        )
+        if status != "connected":
+            self.channel_client = None
+            return status
+
         await self.events_queue.put(
-            "Lien manuel établi avec "
-            f"{sender_login} ({sender_ip}:{listen_port})",
+            f"Connecté au salon '{detail}' ({host_ip}:{host_port})",
         )
+        return "connected"
 
-        if frame.get("type") == "HELLO" and self.listen_port is not None:
-            ack = self._make_hello_frame("HELLO_ACK")
-            await self.transport.send_frame(sender_ip, listen_port, ack)
+    async def leave_channel(self) -> None:
+        if self.channel_client:
+            await self.channel_client.disconnect()
+            self.channel_client = None
+            self.is_hosting = False
+            await self.events_queue.put("Salon quitté")
+
+        if self.channel_server:
+            if self.discovery:
+                self.discovery._stop_beaconing()
+            await self.channel_server.stop()
+            self.channel_server = None
+            self.is_hosting = False
+            await self.events_queue.put("Salon fermé")
+
+    async def send_channel_message(self, message: str) -> str:
+        if self.channel_server:
+            await self.channel_server.local_message(self.login, message)
+            return "sent"
+
+        if self.channel_client and self.channel_client._connected:
+            ok = await self.channel_client.send_message(message)
+            if ok:
+                await self.incoming_queue.put((self.login, message, time.time()))
+                return "sent"
+            return "disconnected"
+
+        return "not_in_channel"
+
+    def list_channels(self) -> list[DiscoveredChannel]:
+        if self.discovery:
+            return self.discovery.get_channels()
+        return []
+
+    def list_members(self) -> list[str]:
+        if self.channel_client:
+            return self.channel_client.members
+        if self.channel_server:
+            return self.channel_server.member_logins()
+        return []
+
+    def current_channel_name(self) -> str:
+        if self.channel_client:
+            return self.channel_client.channel_name
+        if self.channel_server:
+            return self.channel_server.name
+        return ""
+
+    def _on_channel_discovered_sync(self, ch: DiscoveredChannel) -> None:
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(
+                self.events_queue.put(
+                    f"Nouveau salon détecté: {ch.name} "
+                    f"({ch.user_count}/{ch.max_users})",
+                ),
+                self._loop,
+            )
 
 
 def default_login() -> str:

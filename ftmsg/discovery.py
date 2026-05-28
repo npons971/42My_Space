@@ -1,262 +1,216 @@
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from ipaddress import ip_address
+from dataclasses import dataclass, field
+from typing import Any
 
-from zeroconf import (
-    IPVersion,
-    ServiceBrowser,
-    ServiceInfo,
-    ServiceListener,
-    Zeroconf,
-)
+from .channel import ChannelInfo
 
 
-SERVICE_TYPE = "_42msg._tcp.local."
+BROADCAST_PORT = 42069
+BEACON_INTERVAL = 3.0
 
 
-@dataclass(slots=True)
-class Peer:
-    login: str
-    ip: str
-    port: int
-    signing_key_b64: str | None = None
-    encryption_key_b64: str | None = None
-    last_seen: float = 0.0
-
-
-class PeerDirectory:
-    def __init__(self) -> None:
-        self._peers: dict[str, Peer] = {}
-        self._lock = threading.Lock()
-
-    def upsert(self, peer: Peer) -> None:
-        with self._lock:
-            self._peers[peer.login] = peer
-
-    def remove(self, login: str) -> None:
-        with self._lock:
-            self._peers.pop(login, None)
-
-    def get(self, login: str) -> Peer | None:
-        with self._lock:
-            return self._peers.get(login)
-
-    def snapshot(self) -> dict[str, Peer]:
-        with self._lock:
-            return dict(self._peers)
+def resolve_broadcast_addr() -> str:
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(1.0)
+        sock.connect(("8.8.8.8", 80))
+        local_ip = sock.getsockname()[0]
+        sock.close()
+        parts = local_ip.split(".")
+        return f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+    except OSError:
+        return "255.255.255.255"
 
 
 def resolve_local_ip() -> str:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(1.0)
         sock.connect(("8.8.8.8", 80))
-        return sock.getsockname()[0]
+        ip = sock.getsockname()[0]
+        sock.close()
+        return ip
     except OSError:
         return "127.0.0.1"
-    finally:
-        sock.close()
 
 
-def _decode_txt_value(value: bytes | str | None) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    return value
+@dataclass
+class DiscoveredChannel:
+    name: str
+    host_ip: str
+    host_port: int
+    is_public: bool
+    user_count: int
+    max_users: int
+    last_seen: float = 0.0
 
 
-def build_txt_properties(
-    login: str,
-    ip: str,
-    port: int,
-    signing_key_b64: str | None = None,
-    encryption_key_b64: str | None = None,
-) -> dict[bytes, bytes]:
-    properties: dict[bytes, bytes] = {
-        b"login": login.encode("utf-8"),
-        b"ip": ip.encode("utf-8"),
-        b"port": str(port).encode("utf-8"),
-    }
-    if signing_key_b64:
-        properties[b"sign_pubkey"] = signing_key_b64.encode("utf-8")
-        properties[b"pubkey"] = signing_key_b64.encode("utf-8")
-    if encryption_key_b64:
-        properties[b"enc_pubkey"] = encryption_key_b64.encode("utf-8")
-    return properties
-
-
-def parse_peer_from_service_info(info: ServiceInfo) -> Peer | None:
-    props = info.properties or {}
-    login = _decode_txt_value(props.get(b"login"))
-    advertised_ip = _decode_txt_value(props.get(b"ip"))
-    port_str = _decode_txt_value(props.get(b"port"))
-    signing_key = (
-        _decode_txt_value(props.get(b"sign_pubkey"))
-        or _decode_txt_value(props.get(b"pubkey"))
-    )
-    encryption_key = _decode_txt_value(props.get(b"enc_pubkey"))
-
-    if not login or not port_str:
-        return None
-
-    parsed_addresses = info.parsed_addresses()
-    ip = parsed_addresses[0] if parsed_addresses else advertised_ip
-    if not ip:
-        return None
-
-    try:
-        ip_address(ip)
-        port = int(port_str)
-    except ValueError:
-        return None
-
-    return Peer(
-        login=login,
-        ip=ip,
-        port=port,
-        signing_key_b64=signing_key,
-        encryption_key_b64=encryption_key,
-        last_seen=time.time(),
-    )
-
-
-class _PeerListener(ServiceListener):
+class BroadcastDiscovery:
     def __init__(
         self,
-        zeroconf: Zeroconf,
-        peers: PeerDirectory,
-        own_login: str,
-        on_peer_online: Callable[[Peer], None] | None = None,
-        on_peer_offline: Callable[[str], None] | None = None,
+        on_channel: Callable[[DiscoveredChannel], None] | None = None,
+        on_channel_lost: Callable[[str], None] | None = None,
     ) -> None:
-        self._zeroconf = zeroconf
-        self._peers = peers
-        self._own_login = own_login
-        self._on_peer_online = on_peer_online
-        self._on_peer_offline = on_peer_offline
+        self.local_ip = resolve_local_ip()
+        self.broadcast_addr = resolve_broadcast_addr()
+        self.on_channel = on_channel
+        self.on_channel_lost = on_channel_lost
 
-    def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
-        self._refresh(service_type, name)
-
-    def update_service(
-        self,
-        zc: Zeroconf,
-        service_type: str,
-        name: str,
-    ) -> None:
-        self._refresh(service_type, name)
-
-    def remove_service(
-        self,
-        zc: Zeroconf,
-        service_type: str,
-        name: str,
-    ) -> None:
-        login = name.split(".", 1)[0]
-        if login != self._own_login:
-            self._peers.remove(login)
-            if self._on_peer_offline is not None:
-                self._on_peer_offline(login)
-
-    def _refresh(self, service_type: str, name: str) -> None:
-        info = self._zeroconf.get_service_info(service_type, name)
-        if info is None:
-            return
-
-        peer = parse_peer_from_service_info(info)
-        if peer is None or peer.login == self._own_login:
-            return
-
-        self._peers.upsert(peer)
-        if self._on_peer_online is not None:
-            self._on_peer_online(peer)
-
-
-class MdnsDiscovery:
-    def __init__(
-        self,
-        login: str,
-        listen_port: int,
-        signing_key_b64: str | None = None,
-        encryption_key_b64: str | None = None,
-        local_ip: str | None = None,
-        on_peer_online: Callable[[Peer], None] | None = None,
-        on_peer_offline: Callable[[str], None] | None = None,
-    ) -> None:
-        self.login = login
-        self.listen_port = listen_port
-        self.signing_key_b64 = signing_key_b64
-        self.encryption_key_b64 = encryption_key_b64
-        self.local_ip = local_ip or resolve_local_ip()
-        self.on_peer_online = on_peer_online
-        self.on_peer_offline = on_peer_offline
-
-        self._zeroconf: Zeroconf | None = None
-        self._browser: ServiceBrowser | None = None
-        self._listener: _PeerListener | None = None
-        self._registered_info: ServiceInfo | None = None
-        self.peers = PeerDirectory()
+        self._channels: dict[str, DiscoveredChannel] = {}
+        self._lock = threading.Lock()
+        self._running = False
+        self._listen_thread: threading.Thread | None = None
+        self._beacon_thread: threading.Thread | None = None
+        self._beacon_info: ChannelInfo | None = None
+        self._own_channel_key: str | None = None
 
     def start(self) -> None:
-        if self._zeroconf is not None:
+        if self._running:
             return
-
-        try:
-            self._zeroconf = Zeroconf(
-                interfaces=[self.local_ip],
-                ip_version=IPVersion.V4Only,
-            )
-        except Exception:
-            self._zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
-        properties = build_txt_properties(
-            login=self.login,
-            ip=self.local_ip,
-            port=self.listen_port,
-            signing_key_b64=self.signing_key_b64,
-            encryption_key_b64=self.encryption_key_b64,
-        )
-
-        service_name = f"{self.login}.{SERVICE_TYPE}"
-        info = ServiceInfo(
-            type_=SERVICE_TYPE,
-            name=service_name,
-            addresses=[ip_address(self.local_ip).packed],
-            port=self.listen_port,
-            properties=properties,
-        )
-
-        self._zeroconf.register_service(info)
-        self._registered_info = info
-        self._listener = _PeerListener(
-            self._zeroconf,
-            self.peers,
-            own_login=self.login,
-            on_peer_online=self.on_peer_online,
-            on_peer_offline=self.on_peer_offline,
-        )
-        self._browser = ServiceBrowser(
-            self._zeroconf,
-            SERVICE_TYPE,
-            listener=self._listener,
-        )
+        self._running = True
+        self._listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._listen_thread.start()
 
     def stop(self) -> None:
-        if self._zeroconf is None:
+        self._running = False
+        if self._listen_thread:
+            self._listen_thread.join(timeout=2.0)
+            self._listen_thread = None
+        self._stop_beaconing()
+
+    def start_beaconing(self, info: ChannelInfo) -> None:
+        self._beacon_info = info
+        self._own_channel_key = f"{info.host_ip}:{info.host_port}"
+        if self._beacon_thread and self._beacon_thread.is_alive():
             return
+        self._beacon_thread = threading.Thread(target=self._beacon_loop, daemon=True)
+        self._beacon_thread.start()
 
-        if self._registered_info is not None:
-            self._zeroconf.unregister_service(self._registered_info)
-            self._registered_info = None
+    def _stop_beaconing(self) -> None:
+        self._beacon_info = None
+        self._own_channel_key = None
+        self._beacon_thread = None
 
-        self._zeroconf.close()
-        self._zeroconf = None
-        self._browser = None
-        self._listener = None
+    def update_beacon(self, info: ChannelInfo) -> None:
+        self._beacon_info = info
 
-    def online_peers(self) -> dict[str, Peer]:
-        return self.peers.snapshot()
+    def get_channels(self) -> list[DiscoveredChannel]:
+        now = time.time()
+        with self._lock:
+            active = {}
+            for key, ch in self._channels.items():
+                if now - ch.last_seen < 10.0:
+                    active[key] = ch
+                elif self.on_channel_lost:
+                    self.on_channel_lost(ch.name)
+            self._channels = active
+            return list(active.values())
+
+    def _send_beacon(self, sock: socket.socket) -> None:
+        if not self._beacon_info:
+            return
+        info = self._beacon_info
+        packet = json.dumps({
+            "type": "42MSG_BEACON",
+            "channel_name": info.name,
+            "host_ip": info.host_ip,
+            "host_port": info.host_port,
+            "is_public": info.is_public,
+            "user_count": info.user_count,
+            "max_users": info.max_users,
+            "version": 2,
+        }, separators=(",", ":"))
+
+        try:
+            sock.sendto(packet.encode("utf-8"), (self.broadcast_addr, BROADCAST_PORT))
+        except OSError:
+            pass
+
+        if self.local_ip != self.broadcast_addr:
+            try:
+                sock.sendto(packet.encode("utf-8"), (self.local_ip, BROADCAST_PORT))
+            except OSError:
+                pass
+
+    def _beacon_loop(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(1.0)
+
+        try:
+            while self._running and self._beacon_info:
+                self._send_beacon(sock)
+                time.sleep(BEACON_INTERVAL)
+        finally:
+            sock.close()
+
+    def _listen_loop(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(1.0)
+
+        try:
+            sock.bind(("", BROADCAST_PORT))
+        except OSError:
+            try:
+                sock.bind(("", 0))
+            except OSError:
+                sock.close()
+                return
+
+        try:
+            while self._running:
+                try:
+                    data, addr = sock.recvfrom(2048)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+
+                try:
+                    msg = json.loads(data.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+
+                if not isinstance(msg, dict) or msg.get("type") != "42MSG_BEACON":
+                    continue
+
+                if msg.get("version") != 2:
+                    continue
+
+                host_ip = str(msg.get("host_ip", addr[0]))
+                host_port = int(msg.get("host_port", 0))
+                if host_port == 0:
+                    continue
+
+                if host_ip == self.local_ip:
+                    continue
+
+                key = f"{host_ip}:{host_port}"
+                if key == self._own_channel_key:
+                    continue
+
+                ch = DiscoveredChannel(
+                    name=str(msg.get("channel_name", "")),
+                    host_ip=host_ip,
+                    host_port=host_port,
+                    is_public=bool(msg.get("is_public", False)),
+                    user_count=int(msg.get("user_count", 0)),
+                    max_users=int(msg.get("max_users", 0)),
+                    last_seen=time.time(),
+                )
+
+                with self._lock:
+                    self._channels[key] = ch
+
+                if self.on_channel:
+                    self.on_channel(ch)
+
+        finally:
+            sock.close()

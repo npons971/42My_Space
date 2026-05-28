@@ -2,6 +2,10 @@
 tests/
 .gitignore
 
+# BMad configuration and output
+_bmad/
+_bmad-output/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
