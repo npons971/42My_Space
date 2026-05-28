@@ -32,6 +32,7 @@ Aucun package n'est installé globalement sur le système.
 | `make clean` | Supprime le venv et les fichiers Python compilés |
 | `make fclean` | `make clean` + suppression des données utilisateur (`~/.42msg`) |
 | `make re` | `make clean` + `make install` |
+| `make uninstall` | Supprime le venv, les données utilisateur et retire l'alias de `~/.zshrc` |
 
 ## Commandes
 

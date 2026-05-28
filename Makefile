@@ -3,7 +3,7 @@ VENV_DIR    := $(PROJECT_DIR)/.venv
 PYTHON      := $(VENV_DIR)/bin/python
 PIP         := $(VENV_DIR)/bin/pip
 
-.PHONY: install run clean re fclean venv
+.PHONY: install run clean re fclean venv uninstall
 
 venv:
 	@test -d $(VENV_DIR) || (echo "[42msg] Création du venv..." && python3 -m venv $(VENV_DIR))
@@ -38,5 +38,15 @@ clean:
 fclean: clean
 	@rm -rf $(HOME)/.42msg
 	@echo "Suppression des données utilisateur"
+
+uninstall: fclean
+	@echo "[42msg] Suppression de l'alias dans $(HOME)/.zshrc..."
+	@if grep -Fq "alias 42msg=" $(HOME)/.zshrc 2>/dev/null; then \
+		sed -i '/alias 42msg=/d' $(HOME)/.zshrc; \
+		echo "[42msg] Alias retiré. Recharge ton shell: source ~/.zshrc"; \
+	else \
+		echo "[42msg] Alias 42msg non trouvé dans $(HOME)/.zshrc"; \
+	fi
+	@echo "[42msg] Désinstallation terminée"
 
 re: clean install
