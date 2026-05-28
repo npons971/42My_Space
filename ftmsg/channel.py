@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from .protocol import Frame, read_frame, write_frame
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,12 +66,12 @@ class ChannelServer:
                 try:
                     await write_frame(writer, leave)
                 except Exception:
-                    pass
+                    logger.debug("broadcast CHANNEL_CLOSED failed for %s", login, exc_info=True)
                 try:
                     writer.close()
                     await writer.wait_closed()
                 except Exception:
-                    pass
+                    logger.debug("close writer failed for %s", login, exc_info=True)
         self._clients.clear()
         if self._server:
             self._server.close()
@@ -83,7 +87,7 @@ class ChannelServer:
             try:
                 await write_frame(writer, frame)
             except Exception:
-                pass
+                logger.debug("broadcast to %s failed", login, exc_info=True)
 
     async def local_message(self, sender_login: str, payload: str) -> None:
         now = time.time()
@@ -118,6 +122,20 @@ class ChannelServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        # Enable TCP keepalive to detect dead peers
+        sock = writer.transport.get_extra_info("socket")
+        if sock is not None and hasattr(socket, "SO_KEEPALIVE"):
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if hasattr(socket, "TCP_KEEPIDLE"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                if hasattr(socket, "TCP_KEEPINTVL"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+                if hasattr(socket, "TCP_KEEPCNT"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            except OSError:
+                pass
+
         login: str | None = None
         try:
             info: Frame = {
@@ -129,7 +147,7 @@ class ChannelServer:
             }
             await write_frame(writer, info)
 
-            join_frame = await read_frame(reader)
+            join_frame = await asyncio.wait_for(read_frame(reader), timeout=10.0)
             if join_frame.get("type") != "JOIN":
                 await write_frame(writer, {"type": "JOIN_REJECTED", "reason": "expected JOIN"})
                 return
@@ -171,7 +189,7 @@ class ChannelServer:
                 self.on_member_join(login)
 
             while True:
-                frame = await read_frame(reader)
+                frame = await asyncio.wait_for(read_frame(reader), timeout=60.0)
                 if frame.get("type") == "LEAVE":
                     break
                 if frame.get("type") == "MESSAGE":
@@ -187,7 +205,7 @@ class ChannelServer:
                     if self.on_message:
                         self.on_message(login, payload, now)
 
-        except (asyncio.IncompleteReadError, ConnectionError, OSError):
+        except (asyncio.IncompleteReadError, ConnectionError, OSError, TimeoutError):
             pass
         finally:
             if login and login in self._clients:
@@ -199,7 +217,7 @@ class ChannelServer:
                 writer.close()
                 await writer.wait_closed()
             except Exception:
-                pass
+                logger.debug("close peer writer failed", exc_info=True)
 
 
 class ChannelClient:
@@ -233,6 +251,20 @@ class ChannelClient:
             )
         except (TimeoutError, OSError) as exc:
             return "connect_failed", str(exc)
+
+        # Enable TCP keepalive
+        sock = self.writer.transport.get_extra_info("socket")
+        if sock is not None and hasattr(socket, "SO_KEEPALIVE"):
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if hasattr(socket, "TCP_KEEPIDLE"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                if hasattr(socket, "TCP_KEEPINTVL"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+                if hasattr(socket, "TCP_KEEPCNT"):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            except OSError:
+                pass
 
         try:
             info = await read_frame(self.reader)
@@ -276,12 +308,12 @@ class ChannelClient:
             try:
                 await write_frame(self.writer, {"type": "LEAVE"})
             except Exception:
-                pass
+                logger.debug("send LEAVE failed", exc_info=True)
             try:
                 self.writer.close()
                 await self.writer.wait_closed()
             except Exception:
-                pass
+                logger.debug("close writer failed", exc_info=True)
             self.writer = None
         if self._read_task:
             self._read_task.cancel()

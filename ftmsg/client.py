@@ -50,7 +50,10 @@ class FTMessageClient:
             on_channel=self._on_channel_discovered_sync,
         )
         self.discovery.local_ip = self._resolve_local_ip()
-        await asyncio.to_thread(self.discovery.start)
+        try:
+            await asyncio.to_thread(self.discovery.start)
+        except RuntimeError as exc:
+            await self.events_queue.put(f"⚠️ Découverte réseau indisponible: {exc}")
         await self.events_queue.put("Client prêt. Tape /help pour les commandes.")
 
     async def stop(self) -> None:
@@ -149,9 +152,9 @@ class FTMessageClient:
 
     async def join_channel(
         self, host_ip: str, host_port: int, password: str,
-    ) -> str:
+    ) -> tuple[str, str]:
         if self.channel_server or self.channel_client:
-            return "already_in_channel"
+            return "already_in_channel", ""
 
         def on_msg(sender: str, payload: str, ts: float) -> None:
             if self._loop:
@@ -196,12 +199,12 @@ class FTMessageClient:
 
         if status != "connected":
             self.channel_client = None
-            return status
+            return status, detail
 
         await self.events_queue.put(
             f"Connecté au salon '{detail}' ({host_ip}:{host_port})",
         )
-        return "connected"
+        return "connected", detail
 
     async def leave_channel(self) -> None:
         if self.channel_client:

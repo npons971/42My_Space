@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import threading
 import time
@@ -9,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .channel import ChannelInfo
+
+logger = logging.getLogger(__name__)
 
 
 BROADCAST_PORT = 42069
@@ -69,13 +72,20 @@ class BroadcastDiscovery:
         self._beacon_thread: threading.Thread | None = None
         self._beacon_info: ChannelInfo | None = None
         self._own_channel_key: str | None = None
+        self._listen_ready = threading.Event()
+        self._listen_error: str | None = None
 
     def start(self) -> None:
         if self._running:
             return
         self._running = True
+        self._listen_ready.clear()
+        self._listen_error = None
         self._listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
         self._listen_thread.start()
+        if not self._listen_ready.wait(timeout=2.0):
+            self._running = False
+            raise RuntimeError(self._listen_error or f"discovery bind failed on port {BROADCAST_PORT}")
 
     def stop(self) -> None:
         self._running = False
@@ -99,6 +109,15 @@ class BroadcastDiscovery:
 
     def update_beacon(self, info: ChannelInfo) -> None:
         self._beacon_info = info
+
+    def _purge_stale_channels(self) -> None:
+        now = time.time()
+        with self._lock:
+            stale = [k for k, ch in self._channels.items() if now - ch.last_seen >= 10.0]
+            for k in stale:
+                ch = self._channels.pop(k, None)
+                if ch and self.on_channel_lost:
+                    self.on_channel_lost(ch.name)
 
     def get_channels(self) -> list[DiscoveredChannel]:
         now = time.time()
@@ -130,13 +149,13 @@ class BroadcastDiscovery:
         try:
             sock.sendto(packet.encode("utf-8"), (self.broadcast_addr, BROADCAST_PORT))
         except OSError:
-            pass
+            logger.debug("beacon sendto broadcast failed", exc_info=True)
 
         if self.local_ip != self.broadcast_addr:
             try:
                 sock.sendto(packet.encode("utf-8"), (self.local_ip, BROADCAST_PORT))
             except OSError:
-                pass
+                logger.debug("beacon sendto local_ip failed", exc_info=True)
 
     def _beacon_loop(self) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -157,20 +176,25 @@ class BroadcastDiscovery:
 
         try:
             sock.bind(("", BROADCAST_PORT))
-        except OSError:
-            try:
-                sock.bind(("", 0))
-            except OSError:
-                sock.close()
-                return
+        except OSError as exc:
+            self._listen_error = str(exc)
+            sock.close()
+            return
 
+        self._listen_ready.set()
+        cleanup_counter = 0
         try:
             while self._running:
                 try:
                     data, addr = sock.recvfrom(2048)
                 except socket.timeout:
+                    cleanup_counter += 1
+                    if cleanup_counter >= 5:
+                        cleanup_counter = 0
+                        self._purge_stale_channels()
                     continue
                 except OSError:
+                    logger.debug("discovery recvfrom error", exc_info=True)
                     break
 
                 try:

@@ -146,7 +146,7 @@ class FtMsgApp(App[None]):
                     event.input.value = ""
                     return
                 ch = channels[idx]
-                status = await self.client.join_channel(ch.host_ip, ch.host_port, password)
+                status, detail = await self.client.join_channel(ch.host_ip, ch.host_port, password)
             else:
                 if len(parts) < 4:
                     log.write(f"[red][{now}] usage: /join <ip> <port> <password>[/red]")
@@ -160,18 +160,18 @@ class FtMsgApp(App[None]):
                     event.input.value = ""
                     return
                 password = parts[3]
-                status = await self.client.join_channel(host_ip, host_port, password)
+                status, detail = await self.client.join_channel(host_ip, host_port, password)
 
             if status == "connected":
                 log.write(f"[green][{now}] Connecté au salon ![/green]")
             elif status == "rejected":
-                log.write(f"[red][{now}] Rejoint: {password}[/red]" if password else f"[red][{now}] Mot de passe requis[/red]")
+                log.write(f"[red][{now}] Rejoint refusé: {detail}[/red]")
             elif status == "connect_failed":
-                log.write(f"[red][{now}] Impossible de joindre le serveur[/red]")
+                log.write(f"[red][{now}] Impossible de joindre le serveur: {detail}[/red]")
             elif status == "already_in_channel":
                 log.write(f"[red][{now}] Déjà dans un salon[/red]")
             else:
-                log.write(f"[red][{now}] Échec: {status}[/red]")
+                log.write(f"[red][{now}] Échec: {status} ({detail})[/red]")
             event.input.value = ""
             return
 
@@ -223,6 +223,10 @@ class FtMsgApp(App[None]):
             parts = content.split(" ", 1)
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /name <login>[/red]")
+                event.input.value = ""
+                return
+            if self.client.current_channel_name():
+                log.write(f"[red][{now}] Quitte le salon avant de changer de pseudo[/red]")
                 event.input.value = ""
                 return
             self.login = parts[1]
