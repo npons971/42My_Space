@@ -65,6 +65,7 @@ class ChannelServer:
         self._member_keys: dict[str, str] = {}
         self._last_activity: dict[str, float] = {}
         self._rate_limits: dict[str, list[float]] = {}
+        self._banned: set[str] = set()
         self._server: asyncio.AbstractServer | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self.port: int = 0
@@ -148,6 +149,27 @@ class ChannelServer:
 
     def member_logins(self) -> list[str]:
         return list(self._clients.keys())
+
+    def is_banned(self, login: str) -> bool:
+        return login in self._banned
+
+    async def kick(self, login: str) -> bool:
+        writer = self._clients.get(login)
+        if writer is None:
+            return False
+        try:
+            await write_frame(writer, {"type": "KICKED", "reason": "kicked by host"})
+        except Exception:
+            pass
+        try:
+            writer.close()
+        except Exception:
+            pass
+        return True
+
+    async def ban(self, login: str) -> bool:
+        self._banned.add(login)
+        return await self.kick(login)
 
     def beacon_info(self, local_ip: str) -> ChannelInfo:
         return ChannelInfo(
@@ -242,6 +264,10 @@ class ChannelServer:
                 await write_frame(writer, {"type": "JOIN_REJECTED", "reason": "login reserved"})
                 return
 
+            if login in self._banned:
+                await write_frame(writer, {"type": "JOIN_REJECTED", "reason": "banned"})
+                return
+
             if not self.is_public and password != self.password:
                 await write_frame(writer, {"type": "JOIN_REJECTED", "reason": "wrong password"})
                 return
@@ -285,6 +311,16 @@ class ChannelServer:
                                 await write_frame(target_writer, frame)
                             except Exception:
                                 logger.debug("ROOM_KEY routing failed for %s", target, exc_info=True)
+                    continue
+                if ftype == "PRIVATE_MESSAGE":
+                    target = str(frame.get("target_login", ""))
+                    if target and target in self._clients:
+                        target_writer = self._clients[target]
+                        if target_writer is not None:
+                            try:
+                                await write_frame(target_writer, frame)
+                            except Exception:
+                                logger.debug("PRIVATE_MESSAGE routing failed for %s", target, exc_info=True)
                     continue
                 if ftype == "MESSAGE":
                     if not self._check_rate_limit(login):
@@ -523,6 +559,20 @@ class ChannelClient:
                     encrypted_key = str(frame.get("encrypted_key", ""))
                     if encrypted_key and self.on_room_key:
                         self.on_room_key(encrypted_key)
+
+                elif ftype == "KICKED":
+                    reason = str(frame.get("reason", "kicked"))
+                    self._connected = False
+                    if self.on_disconnect:
+                        self.on_disconnect(reason)
+                    break
+
+                elif ftype == "PRIVATE_MESSAGE":
+                    sender = str(frame.get("sender_login", ""))
+                    payload = str(frame.get("payload", ""))
+                    ts = float(frame.get("timestamp", time.time()))
+                    if self.on_message and sender:
+                        self.on_message(sender, f"[MP] {payload}", ts)
 
                 else:
                     pass

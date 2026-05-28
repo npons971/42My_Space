@@ -161,6 +161,9 @@ class FtMsgApp(App[None]):
                 "  [bold]/join <index> <password>[/bold]       — rejoindre depuis /list\n"
                 "  [bold]/leave[/bold]                         — quitter le salon\n"
                 "  [bold]/peers[/bold]                         — membres du salon\n"
+                "  [bold]/msg <login> <text>[/bold]            — message privé\n"
+                "  [bold]/kick <login>[/bold]                  — expulser (hôte)\n"
+                "  [bold]/ban <login>[/bold]                   — bannir (hôte)\n"
                 "  [bold]/name <login>[/bold]                  — changer pseudo\n"
                 "  [bold]/help[/bold]                          — cette aide\n"
                 "  [bold]/quit[/bold]                          — quitter\n"
@@ -247,6 +250,57 @@ class FtMsgApp(App[None]):
                     f"[magenta][{now}] Salon '{cname}' — "
                     f"{len(members)} membre(s):[/magenta] {summary}",
                 )
+            event.input.value = ""
+            return
+
+        if content.startswith("/kick "):
+            parts = content.split(" ", 1)
+            if len(parts) < 2:
+                log.write(f"[red][{now}] usage: /kick <login>[/red]")
+            else:
+                target = parts[1]
+                status = await self.client.kick_member(target)
+                if status == "kicked":
+                    log.write(f"[yellow][{now}] {target} expulsé[/yellow]")
+                elif status == "not_hosting":
+                    log.write(f"[red][{now}] Tu n'es pas l'hôte[/red]")
+                else:
+                    log.write(f"[red][{now}] {target} non trouvé[/red]")
+            event.input.value = ""
+            return
+
+        if content.startswith("/ban "):
+            parts = content.split(" ", 1)
+            if len(parts) < 2:
+                log.write(f"[red][{now}] usage: /ban <login>[/red]")
+            else:
+                target = parts[1]
+                status = await self.client.ban_member(target)
+                if status == "banned":
+                    log.write(f"[yellow][{now}] {target} banni[/yellow]")
+                elif status == "not_hosting":
+                    log.write(f"[red][{now}] Tu n'es pas l'hôte[/red]")
+                else:
+                    log.write(f"[red][{now}] {target} non trouvé[/red]")
+            event.input.value = ""
+            return
+
+        if content.startswith("/msg "):
+            parts = content.split(" ", 2)
+            if len(parts) < 3:
+                log.write(f"[red][{now}] usage: /msg <login> <message>[/red]")
+            else:
+                target = parts[1]
+                msg = parts[2]
+                status = await self.client.send_private_message(target, msg)
+                if status == "sent":
+                    log.write(f"[cyan][{now}] MP à {target}: {msg}[/cyan]")
+                elif status == "not_in_channel":
+                    log.write(f"[red][{now}] Tu n'es dans aucun salon[/red]")
+                elif status == "not_found":
+                    log.write(f"[red][{now}] {target} n'est pas dans le salon[/red]")
+                else:
+                    log.write(f"[red][{now}] Envoi MP échoué[/red]")
             event.input.value = ""
             return
 

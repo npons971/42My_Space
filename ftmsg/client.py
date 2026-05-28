@@ -285,26 +285,63 @@ class FTMessageClient:
             await self.events_queue.put("Salon fermé")
 
     async def send_channel_message(self, message: str) -> str:
-        payload = message
-        if self.room_key:
-            try:
-                encrypted = encrypt_symmetric(message, self.room_key)
-                payload = f"ENCRYPTED:{encrypted}"
-            except Exception:
-                return "encryption_failed"
-
         if self.channel_server:
-            ok = await self.channel_server.local_message(self.login, payload)
+            ok = await self.channel_server.local_message(self.login, message)
             if ok:
                 return "sent"
             return "rate_limited"
 
         if self.channel_client and self.channel_client._connected:
-            ok = await self.channel_client.send_message(payload)
+            ok = await self.channel_client.send_message(message)
             if ok:
                 await self.incoming_queue.put((self.login, message, time.time()))
                 return "sent"
             return "disconnected"
+
+        return "not_in_channel"
+
+    async def kick_member(self, login: str) -> str:
+        if not self.channel_server:
+            return "not_hosting"
+        ok = await self.channel_server.kick(login)
+        return "kicked" if ok else "not_found"
+
+    async def ban_member(self, login: str) -> str:
+        if not self.channel_server:
+            return "not_hosting"
+        ok = await self.channel_server.ban(login)
+        return "banned" if ok else "not_found"
+
+    async def send_private_message(self, target: str, message: str) -> str:
+        if self.channel_server:
+            frame = {
+                "type": "PRIVATE_MESSAGE",
+                "sender_login": self.login,
+                "target_login": target,
+                "payload": message,
+                "timestamp": time.time(),
+            }
+            ok = await self.channel_server.send_to(target, frame)
+            if ok:
+                await self.incoming_queue.put((self.login, f"[MP→{target}] {message}", time.time()))
+                return "sent"
+            return "not_found"
+
+        if self.channel_client and self.channel_client._connected:
+            frame = {
+                "type": "PRIVATE_MESSAGE",
+                "sender_login": self.login,
+                "target_login": target,
+                "payload": message,
+                "timestamp": time.time(),
+            }
+            try:
+                from .protocol import write_frame
+                await write_frame(self.channel_client.writer, frame)
+                await self.incoming_queue.put((self.login, f"[MP→{target}] {message}", time.time()))
+                return "sent"
+            except Exception:
+                return "disconnected"
 
         return "not_in_channel"
 
