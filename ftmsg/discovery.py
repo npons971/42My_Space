@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import struct
 import threading
 import time
 from collections.abc import Callable
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 BROADCAST_PORT = 42069
 BEACON_INTERVAL = 3.0
+MCAST_GROUP = "239.255.42.69"
 
 
 def resolve_broadcast_addr() -> str:
@@ -150,6 +152,11 @@ class BroadcastDiscovery:
             except OSError:
                 logger.debug("beacon sendto local_ip failed", exc_info=True)
 
+        try:
+            sock.sendto(packet.encode("utf-8"), (MCAST_GROUP, BROADCAST_PORT))
+        except OSError:
+            logger.debug("beacon sendto multicast failed", exc_info=True)
+
     def _beacon_loop(self) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -173,6 +180,12 @@ class BroadcastDiscovery:
             self._listen_error = str(exc)
             sock.close()
             return
+
+        try:
+            mreq = struct.pack("4sL", socket.inet_aton(MCAST_GROUP), socket.INADDR_ANY)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        except OSError:
+            logger.debug("multicast join failed", exc_info=True)
 
         self._listen_ready.set()
         cleanup_counter = 0
