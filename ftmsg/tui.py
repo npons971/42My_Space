@@ -4,10 +4,15 @@ import asyncio
 import time
 
 from textual.app import App, ComposeResult
-from textual.containers import Container
-from textual.widgets import Footer, Header, Input, RichLog
+from textual.containers import Container, Horizontal
+from textual.widgets import Footer, Header, Input, RichLog, Static
 
 from .client import FTMessageClient, default_login
+
+_COMMANDS = [
+    "/create ", "/join ", "/list", "/leave", "/peers",
+    "/name ", "/help", "/quit",
+]
 
 
 class FtMsgApp(App[None]):
@@ -25,7 +30,14 @@ class FtMsgApp(App[None]):
 
     #compose {
         dock: bottom;
-        height: 3;
+        height: auto;
+        padding: 0 1;
+    }
+
+    #suggestions {
+        height: auto;
+        display: none;
+        color: $text-muted;
         padding: 0 1;
     }
     """
@@ -34,12 +46,14 @@ class FtMsgApp(App[None]):
         super().__init__()
         self.login = login or default_login()
         self.client = FTMessageClient(self.login)
+        self._has_unread = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Container(id="chat"):
             yield RichLog(id="messages", wrap=True, markup=True)
         with Container(id="compose"):
+            yield Static("", id="suggestions")
             yield Input(
                 placeholder="Tape un message ou une commande…",
                 id="message_input",
@@ -60,14 +74,24 @@ class FtMsgApp(App[None]):
     async def _startup(self) -> None:
         await self.client.start()
 
+    def _is_scrolled_to_bottom(self, log: RichLog) -> bool:
+        # RichLog scroll area check
+        try:
+            return log.scroll_offset.y >= log.max_scroll_y
+        except Exception:
+            return True
+
     async def _drain_queues(self) -> None:
         log = self.query_one("#messages", RichLog)
+        at_bottom = self._is_scrolled_to_bottom(log)
+        new_messages = False
 
         while True:
             try:
                 sender, message, ts = self.client.incoming_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            new_messages = True
             ts_str = time.strftime("%H:%M:%S", time.localtime(ts))
             prefix = "moi" if sender == self.login else sender
             log.write(f"[green][{ts_str}] {prefix}:[/green] {message}")
@@ -77,11 +101,43 @@ class FtMsgApp(App[None]):
                 event = self.client.events_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            new_messages = True
             now = time.strftime("%H:%M:%S")
             log.write(f"[yellow][{now}] {event}[/yellow]")
 
+        if new_messages:
+            if at_bottom:
+                log.scroll_end()
+            else:
+                self._has_unread = True
+                self.notify("Nouveaux messages", title="42msg", severity="information")
+
     async def on_unmount(self) -> None:
         await self.client.stop()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        suggestions = self.query_one("#suggestions", Static)
+        val = event.value
+        if val.startswith("/"):
+            matches = [c for c in _COMMANDS if c.startswith(val)]
+            if matches:
+                suggestions.update("Suggestions: " + "  ".join(matches))
+                suggestions.styles.display = "block"
+                return
+        suggestions.styles.display = "none"
+
+    def on_key(self, event) -> None:
+        if event.key == "tab":
+            inp = self.query_one("#message_input", Input)
+            val = inp.value
+            if val.startswith("/"):
+                matches = [c for c in _COMMANDS if c.startswith(val)]
+                if matches:
+                    inp.value = matches[0]
+                    inp.cursor_position = len(inp.value)
+                    event.stop()
+                    event.prevent_default()
+            self.query_one("#suggestions", Static).styles.display = "none"
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         content = event.value.strip()
