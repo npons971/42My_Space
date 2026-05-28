@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import socket
 import time
 from collections.abc import Callable
@@ -12,6 +13,21 @@ from typing import Any
 from .protocol import Frame, read_frame, write_frame
 
 logger = logging.getLogger(__name__)
+
+HEARTBEAT_INTERVAL = 30.0
+HEARTBEAT_TIMEOUT = 90.0
+RATE_LIMIT_WINDOW = 10.0
+RATE_LIMIT_MAX = 10
+
+LOGIN_RE = re.compile(r"^[a-zA-Z0-9_-]{1,20}$")
+
+
+def validate_login(login: str) -> str | None:
+    if not login:
+        return "login required"
+    if not LOGIN_RE.match(login):
+        return "login must be 1-20 chars, alphanumeric/_/-"
+    return None
 
 
 @dataclass
@@ -46,7 +62,10 @@ class ChannelServer:
         self.on_member_leave = on_member_leave
 
         self._clients: dict[str, asyncio.StreamWriter] = {}
+        self._last_activity: dict[str, float] = {}
+        self._rate_limits: dict[str, list[float]] = {}
         self._server: asyncio.AbstractServer | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self.port: int = 0
 
     async def start(self, host: str = "0.0.0.0", port: int = 0) -> int:
@@ -57,9 +76,14 @@ class ChannelServer:
         self.port = socks[0].getsockname()[1]
 
         self._clients[self.owner_login] = None
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         return self.port
 
     async def stop(self) -> None:
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+
         leave = {"type": "CHANNEL_CLOSED", "reason": "host disconnected"}
         for login, writer in list(self._clients.items()):
             if writer is not None:
@@ -73,6 +97,8 @@ class ChannelServer:
                 except Exception:
                     logger.debug("close writer failed for %s", login, exc_info=True)
         self._clients.clear()
+        self._last_activity.clear()
+        self._rate_limits.clear()
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -117,6 +143,37 @@ class ChannelServer:
             max_users=self.max_users,
         )
 
+    def _check_rate_limit(self, login: str) -> bool:
+        now = time.time()
+        timestamps = self._rate_limits.get(login, [])
+        timestamps = [ts for ts in timestamps if now - ts < RATE_LIMIT_WINDOW]
+        self._rate_limits[login] = timestamps
+        if len(timestamps) >= RATE_LIMIT_MAX:
+            return False
+        timestamps.append(now)
+        return True
+
+    async def _heartbeat_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                await self.broadcast({"type": "PING"})
+                # Disconnect idle peers
+                now = time.time()
+                stale = [
+                    login for login, ts in list(self._last_activity.items())
+                    if now - ts > HEARTBEAT_TIMEOUT
+                ]
+                for login in stale:
+                    writer = self._clients.get(login)
+                    if writer is not None:
+                        try:
+                            writer.close()
+                        except Exception:
+                            pass
+        except asyncio.CancelledError:
+            pass
+
     async def _handle_client(
         self,
         reader: asyncio.StreamReader,
@@ -155,8 +212,9 @@ class ChannelServer:
             login = str(join_frame.get("login", ""))
             password = str(join_frame.get("password", ""))
 
-            if not login:
-                await write_frame(writer, {"type": "JOIN_REJECTED", "reason": "login required"})
+            err = validate_login(login)
+            if err:
+                await write_frame(writer, {"type": "JOIN_REJECTED", "reason": err})
                 return
 
             if login in self._clients:
@@ -176,6 +234,7 @@ class ChannelServer:
                 return
 
             self._clients[login] = writer
+            self._last_activity[login] = time.time()
 
             members = list(self._clients.keys())
             await write_frame(writer, {
@@ -190,9 +249,16 @@ class ChannelServer:
 
             while True:
                 frame = await asyncio.wait_for(read_frame(reader), timeout=60.0)
-                if frame.get("type") == "LEAVE":
+                self._last_activity[login] = time.time()
+                ftype = frame.get("type")
+
+                if ftype == "LEAVE":
                     break
-                if frame.get("type") == "MESSAGE":
+                if ftype == "PONG":
+                    continue
+                if ftype == "MESSAGE":
+                    if not self._check_rate_limit(login):
+                        continue
                     now = time.time()
                     payload = str(frame.get("payload", ""))
                     msg_frame: Frame = {
@@ -210,6 +276,8 @@ class ChannelServer:
         finally:
             if login and login in self._clients:
                 del self._clients[login]
+                self._last_activity.pop(login, None)
+                self._rate_limits.pop(login, None)
                 await self.broadcast({"type": "USER_LEFT", "login": login})
                 if self.on_member_leave:
                     self.on_member_leave(login)
@@ -241,10 +309,16 @@ class ChannelClient:
         self.members: list[str] = []
         self._connected = False
         self._read_task: asyncio.Task[None] | None = None
+        self._watchdog_task: asyncio.Task[None] | None = None
+        self._last_server_frame: float = 0.0
 
     async def connect(
         self, host: str, port: int, password: str, login: str,
     ) -> tuple[str, str]:
+        err = validate_login(login)
+        if err:
+            return "invalid_login", err
+
         try:
             self.reader, self.writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port), timeout=5.0,
@@ -290,7 +364,9 @@ class ChannelClient:
             self.channel_name = str(response.get("channel_name", ""))
             self.members = list(response.get("members", []))
             self._connected = True
+            self._last_server_frame = time.time()
             self._read_task = asyncio.create_task(self._read_loop())
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
 
             for m in self.members:
                 if m != login and self.on_member_join:
@@ -304,6 +380,9 @@ class ChannelClient:
 
     async def disconnect(self) -> None:
         self._connected = False
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
         if self.writer:
             try:
                 await write_frame(self.writer, {"type": "LEAVE"})
@@ -335,6 +414,7 @@ class ChannelClient:
         try:
             while self._connected and self.reader:
                 frame = await read_frame(self.reader)
+                self._last_server_frame = time.time()
                 ftype = frame.get("type")
 
                 if ftype == "MESSAGE":
@@ -365,6 +445,12 @@ class ChannelClient:
                         self.on_disconnect(reason)
                     break
 
+                elif ftype == "PING":
+                    try:
+                        await write_frame(self.writer, {"type": "PONG"})
+                    except Exception:
+                        logger.debug("send PONG failed", exc_info=True)
+
                 else:
                     pass
 
@@ -374,3 +460,16 @@ class ChannelClient:
             self._connected = False
             if self.on_disconnect:
                 self.on_disconnect("connection lost")
+
+    async def _watchdog_loop(self) -> None:
+        try:
+            while self._connected:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                if time.time() - self._last_server_frame > HEARTBEAT_TIMEOUT:
+                    logger.debug("watchdog timeout, disconnecting")
+                    self._connected = False
+                    if self.on_disconnect:
+                        self.on_disconnect("heartbeat timeout")
+                    break
+        except asyncio.CancelledError:
+            pass

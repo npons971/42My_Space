@@ -37,8 +37,8 @@ class FTMessageClient:
         self.channel_client: ChannelClient | None = None
         self.is_hosting = False
 
-        self.incoming_queue: asyncio.Queue[tuple[str, str, float]] = asyncio.Queue()
-        self.events_queue: asyncio.Queue[str] = asyncio.Queue()
+        self.incoming_queue: asyncio.Queue[tuple[str, str, float]] = asyncio.Queue(maxsize=1000)
+        self.events_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=500)
         self._loop: asyncio.AbstractEventLoop | None = None
 
     async def start(self) -> None:

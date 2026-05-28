@@ -120,16 +120,9 @@ class BroadcastDiscovery:
                     self.on_channel_lost(ch.name)
 
     def get_channels(self) -> list[DiscoveredChannel]:
-        now = time.time()
+        self._purge_stale_channels()
         with self._lock:
-            active = {}
-            for key, ch in self._channels.items():
-                if now - ch.last_seen < 10.0:
-                    active[key] = ch
-                elif self.on_channel_lost:
-                    self.on_channel_lost(ch.name)
-            self._channels = active
-            return list(active.values())
+            return list(self._channels.values())
 
     def _send_beacon(self, sock: socket.socket) -> None:
         if not self._beacon_info:
