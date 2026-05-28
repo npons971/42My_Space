@@ -1,10 +1,19 @@
 PROJECT_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-VENV_DIR   := $(PROJECT_DIR)/.venv
-PYTHON     := $(VENV_DIR)/bin/python
+VENV_DIR    := $(PROJECT_DIR)/.venv
+PYTHON      := $(VENV_DIR)/bin/python
+PIP         := $(VENV_DIR)/bin/pip
 
-.PHONY: install run clean re fclean
+.PHONY: install run clean re fclean venv
 
-install:
+venv:
+	@test -d $(VENV_DIR) || (echo "[42msg] Création du venv..." && python3 -m venv $(VENV_DIR))
+	@echo "[42msg] Mise à jour de pip dans le venv..."
+	@$(PIP) install --upgrade pip --quiet
+
+install: venv
+	@echo "[42msg] Installation des dépendances dans le venv..."
+	@$(PIP) install --no-user -r $(PROJECT_DIR)/requirements.txt
+	@echo "[42msg] Configuration de l'alias..."
 	@bash $(PROJECT_DIR)/install.sh
 
 run:

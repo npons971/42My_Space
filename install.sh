@@ -3,23 +3,21 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${PROJECT_DIR}/.venv"
-PYTHON_BIN="${PYTHON:-python3}"
+PYTHON_BIN="${VENV_DIR}/bin/python"
 ZSHRC_FILE="${HOME}/.zshrc"
-ALIAS_LINE="alias 42msg='cd ${PROJECT_DIR} && source ${VENV_DIR}/bin/activate && python -m ftmsg'"
+ALIAS_LINE="alias 42msg='cd ${PROJECT_DIR} && ${PYTHON_BIN} -m ftmsg'"
 
 echo "[42msg] Project dir: ${PROJECT_DIR}"
 
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "[42msg] Python introuvable: ${PYTHON_BIN}" >&2
+if [[ ! -d "${VENV_DIR}" ]]; then
+  echo "[42msg] Venv introuvable. Lance d'abord: make install" >&2
   exit 1
 fi
 
-echo "[42msg] Création du venv..."
-"${PYTHON_BIN}" -m venv "${VENV_DIR}"
-
-echo "[42msg] Installation des dépendances..."
-"${VENV_DIR}/bin/python" -m pip install --upgrade pip
-"${VENV_DIR}/bin/pip" install -r "${PROJECT_DIR}/requirements.txt"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "[42msg] Python du venv introuvable: ${PYTHON_BIN}" >&2
+  exit 1
+fi
 
 touch "${ZSHRC_FILE}"
 if ! grep -Fq "alias 42msg=" "${ZSHRC_FILE}"; then

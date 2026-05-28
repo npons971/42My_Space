@@ -8,7 +8,7 @@ sur TCP. Pas de serveur central — chaque salon est hébergé par son créateur
 ```bash
 git clone <url_du_repo>
 cd 42My_Space
-make install
+make install   # crée le venv, installe les deps localement, configure l'alias
 source ~/.zshrc
 42msg
 ```
@@ -18,6 +18,22 @@ Ou avec un pseudo spécifique:
 ```bash
 42msg --login mon_login
 ```
+
+## Installation & venv
+
+Les dépendances s'installent **exclusivement** dans un venv local (`.venv/`).
+Aucun package n'est installé globalement sur le système.
+
+| Commande | Description |
+|---|---|
+| `make install` | Crée le venv, installe les dépendances et ajoute l'alias dans `~/.zshrc` |
+| `make run` | Lance l'application avec le Python du venv |
+| `make run-login LOGIN=...` | Lance l'application avec un login spécifique |
+| `make clean` | Supprime le venv et les fichiers Python compilés |
+| `make fclean` | `make clean` + suppression des données utilisateur (`~/.42msg`) |
+| `make re` | `make clean` + `make install` |
+
+**Note:** `install.sh` ne doit pas être exécuté directement ; il est appelé par `make install`.
 
 ## Commandes
 
