@@ -139,10 +139,30 @@ async def _remove_from_channel(client: ClientState) -> None:
 
 
 async def _cleanup(client: ClientState) -> None:
+    was_in_channel = bool(client.channel_name)
     await _remove_from_channel(client)
     _logins.pop(client.login, None)
     _clients.pop(client.ws, None)
     logger.info("%s disconnected (%d online)", client.login, len(_clients))
+    if was_in_channel:
+        await _broadcast_list()
+
+async def _broadcast_list() -> None:
+    ch_list = []
+    for ch in _channels.values():
+        ch_list.append({
+            "name": ch.name,
+            "owner_login": ch.owner_login,
+            "is_public": ch.is_public,
+            "user_count": len(ch.members),
+            "max_users": ch.max_users,
+        })
+    frame = json.dumps({"type": "CHANNEL_LIST", "channels": ch_list}, separators=(",", ":"))
+    for client in list(_clients.values()):
+        try:
+            await client.ws.send(frame)
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -191,6 +211,7 @@ async def _handle_create(client: ClientState, frame: dict) -> None:
     })
     logger.info("%s created channel '%s' (%d max, %s)",
                 client.login, name, max_users, "public" if is_public else "private")
+    await _broadcast_list()
 
 
 async def _handle_join(client: ClientState, frame: dict) -> None:
@@ -235,6 +256,7 @@ async def _handle_join(client: ClientState, frame: dict) -> None:
                      exclude=client.login)
     logger.info("%s joined '%s' (%d/%d)",
                 client.login, channel_name, len(ch.members), ch.max_users)
+    await _broadcast_list()
 
 
 async def _handle_leave(client: ClientState, frame: dict) -> None:
@@ -243,6 +265,7 @@ async def _handle_leave(client: ClientState, frame: dict) -> None:
         return
     await _remove_from_channel(client)
     await _send(client.ws, {"type": "LEFT"})
+    await _broadcast_list()
 
 
 async def _handle_message(client: ClientState, frame: dict) -> None:
@@ -304,6 +327,7 @@ async def _handle_kick(client: ClientState, frame: dict) -> None:
     await _send(target.ws, {"type": "KICKED", "reason": "kicked by host"})
     await _remove_from_channel(target)
     logger.info("%s kicked %s from '%s'", client.login, target_login, ch.name)
+    await _broadcast_list()
 
 
 async def _handle_ban(client: ClientState, frame: dict) -> None:
@@ -323,6 +347,7 @@ async def _handle_ban(client: ClientState, frame: dict) -> None:
         await _send(target.ws, {"type": "KICKED", "reason": "banned by host"})
         await _remove_from_channel(target)
     logger.info("%s banned %s from '%s'", client.login, target_login, ch.name)
+    await _broadcast_list()
 
 
 _HANDLERS = {
