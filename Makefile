@@ -29,10 +29,6 @@ run:
 	@test -d $(VENV_DIR) || (echo "Lance 'make install' d'abord" && exit 1)
 	@$(PYTHON) -m ftmsg --relay wss://four2my-space.onrender.com
 
-run-login:
-	@test -d $(VENV_DIR) || (echo "Lance 'make install' d'abord" && exit 1)
-	@$(PYTHON) -m ftmsg --login $(LOGIN) --relay wss://four2my-space.onrender.com
-
 clean:
 	@rm -rf $(VENV_DIR)
 	@rm -rf __pycache__ */__pycache__ */*/__pycache__

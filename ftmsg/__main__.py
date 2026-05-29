@@ -9,7 +9,6 @@ from .tui import run_tui
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="42msg terminal client")
-    parser.add_argument("--login", help="Login 42 affiché sur le réseau", default=None)
     parser.add_argument("--debug", action="store_true", help="Active les logs de debug")
     parser.add_argument("--host", metavar="NAME", help="Créer un salon et quitter (mode headless)")
     parser.add_argument("--max", dest="max_users", type=int, default=10, help="Max users pour --host")
@@ -34,11 +33,11 @@ def main() -> None:
     elif args.join:
         asyncio.run(_run_headless_join(args))
     else:
-        run_tui(login=args.login)
+        run_tui()
 
 
 async def _run_headless_host(args) -> None:
-    login = args.login or args.host
+    login = args.host
     client = FTMessageClient(login)
     await client.start()
     is_public = (args.password == "")
@@ -61,7 +60,7 @@ async def _run_headless_join(args) -> None:
         print("Format: IP:PORT", file=sys.stderr)
         sys.exit(1)
     host_ip, host_port = parts[0], int(parts[1])
-    login = args.login or "guest"
+    login = "guest"
     client = FTMessageClient(login)
     await client.start()
     status, detail = await client.join_channel(host_ip, host_port, args.join_password)

@@ -11,7 +11,7 @@ from .client import FTMessageClient, default_login
 
 _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
-    "/name ", "/msg ", "/kick ", "/ban ", "/help", "/quit",
+    "/msg ", "/kick ", "/ban ", "/help", "/quit",
 ]
 
 
@@ -164,7 +164,6 @@ class FtMsgApp(App[None]):
                 "  [bold]/msg <login> <text>[/bold]            — message privé\n"
                 "  [bold]/kick <login>[/bold]                  — expulser (hôte)\n"
                 "  [bold]/ban <login>[/bold]                   — bannir (hôte)\n"
-                "  [bold]/name <login>[/bold]                  — changer pseudo\n"
                 "  [bold]/help[/bold]                          — cette aide\n"
                 "  [bold]/quit[/bold]                          — quitter\n"
                 "  Tape un message puis Entrée pour l'envoyer dans le salon.",
@@ -333,22 +332,6 @@ class FtMsgApp(App[None]):
                 log.write(f"[red][{now}] Déjà dans un salon, quitte-le d'abord[/red]")
             else:
                 log.write(f"[red][{now}] Échec création: {status}[/red]")
-            event.input.value = ""
-            return
-
-        if content.startswith("/name "):
-            parts = content.split(" ", 1)
-            if len(parts) < 2:
-                log.write(f"[red][{now}] usage: /name <login>[/red]")
-                event.input.value = ""
-                return
-            if self.client.current_channel_name():
-                log.write(f"[red][{now}] Quitte le salon avant de changer de pseudo[/red]")
-                event.input.value = ""
-                return
-            self.login = parts[1]
-            self.client.login = parts[1]
-            log.write(f"[yellow][{now}] Pseudo changé: {self.login}[/yellow]")
             event.input.value = ""
             return
 
