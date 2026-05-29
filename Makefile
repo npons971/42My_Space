@@ -21,6 +21,10 @@ install: venv
 		echo "[42msg] Alias 42msg déjà présent dans $(HOME)/.zshrc"; \
 	fi
 
+relay: venv
+	@echo "[42msg] Lancement du relais local..."
+	@$(PYTHON) relay_server.py
+
 run:
 	@test -d $(VENV_DIR) || (echo "Lance 'make install' d'abord" && exit 1)
 	@$(PYTHON) -m ftmsg

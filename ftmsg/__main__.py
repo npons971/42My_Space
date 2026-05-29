@@ -16,7 +16,12 @@ def main() -> None:
     parser.add_argument("--password", default="", help="Mot de passe pour --host")
     parser.add_argument("--join", metavar="IP:PORT", help="Rejoindre un salon et quitter (mode headless)")
     parser.add_argument("--join-password", default="", dest="join_password", help="Mot de passe pour --join")
+    parser.add_argument("--relay", metavar="URL", help="URL du serveur relais WebSocket (ex: wss://relay.render.com)")
     args = parser.parse_args()
+
+    if args.relay:
+        import os
+        os.environ["FTMSG_RELAY_URL"] = args.relay
 
     if args.debug:
         logging.basicConfig(

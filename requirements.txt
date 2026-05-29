@@ -2,3 +2,4 @@ pynacl
 aiosqlite
 textual
 pytest
+websockets

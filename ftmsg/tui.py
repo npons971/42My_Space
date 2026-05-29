@@ -11,7 +11,7 @@ from .client import FTMessageClient, default_login
 
 _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
-    "/name ", "/help", "/quit",
+    "/name ", "/msg ", "/kick ", "/ban ", "/help", "/quit",
 ]
 
 
@@ -190,13 +190,13 @@ class FtMsgApp(App[None]):
             return
 
         if content.startswith("/join "):
-            parts = content.split(" ", 3)
+            parts = content.split(" ")
             if len(parts) < 2:
-                log.write(f"[red][{now}] usage: /join <ip> <port> <password> ou /join <index> <password>[/red]")
+                log.write(f"[red][{now}] usage: /join <nom|ip> [port] [password] ou /join <index> [password][/red]")
                 event.input.value = ""
                 return
 
-            if parts[1].isdigit():
+            if parts[1].isdigit() and len(parts[1]) < 4:
                 idx = int(parts[1])
                 password = parts[2] if len(parts) > 2 else ""
                 channels = self.client.list_channels()
@@ -205,21 +205,28 @@ class FtMsgApp(App[None]):
                     event.input.value = ""
                     return
                 ch = channels[idx]
-                status, detail = await self.client.join_channel(ch.host_ip, ch.host_port, password)
+                status, detail = await self.client.join_channel(ch.host_ip if ch.host_ip != "relay" else ch.name, ch.host_port, password)
             else:
-                if len(parts) < 4:
-                    log.write(f"[red][{now}] usage: /join <ip> <port> <password>[/red]")
-                    event.input.value = ""
-                    return
-                host_ip = parts[1]
-                try:
-                    host_port = int(parts[2])
-                except ValueError:
-                    log.write(f"[red][{now}] port invalide[/red]")
-                    event.input.value = ""
-                    return
-                password = parts[3]
-                status, detail = await self.client.join_channel(host_ip, host_port, password)
+                if self.client.relay_url:
+                    # Mode relais: /join <nom_salon> [password]
+                    channel_name = parts[1]
+                    password = parts[2] if len(parts) > 2 else ""
+                    status, detail = await self.client.join_channel(channel_name, 0, password)
+                else:
+                    # Mode direct: /join <ip> <port> [password]
+                    if len(parts) < 3:
+                        log.write(f"[red][{now}] usage: /join <ip> <port> [password][/red]")
+                        event.input.value = ""
+                        return
+                    host_ip = parts[1]
+                    try:
+                        host_port = int(parts[2])
+                    except ValueError:
+                        log.write(f"[red][{now}] port invalide[/red]")
+                        event.input.value = ""
+                        return
+                    password = parts[3] if len(parts) > 3 else ""
+                    status, detail = await self.client.join_channel(host_ip, host_port, password)
 
             if status == "connected":
                 log.write(f"[green][{now}] Connecté au salon ![/green]")

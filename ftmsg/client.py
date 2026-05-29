@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+import logging
 import os
 import time
 from pathlib import Path
+from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from .channel import ChannelClient, ChannelServer
 from .crypto import (
@@ -37,11 +42,21 @@ class FTMessageClient:
 
         self.store = MessageStore(self.db_path)
         self.trust = TrustStore(self.db_path)
+        self.trust = TrustStore(self.db_path)
         self.local_ip = os.environ.get("FTMSG_LOCAL_IP")
+        self.relay_url = os.environ.get("FTMSG_RELAY_URL")
 
         self.discovery: BroadcastDiscovery | None = None
         self.channel_server: ChannelServer | None = None
         self.channel_client: ChannelClient | None = None
+        self.ws: Any | None = None
+        self._relay_task: asyncio.Task | None = None
+        self._relay_channels: list[DiscoveredChannel] = []
+        self._relay_current_channel: str | None = None
+        self._relay_members: list[str] = []
+        self._pending_join: asyncio.Future | None = None
+        self._pending_create: asyncio.Future | None = None
+
         self.is_hosting = False
         self.room_key: bytes | None = None
 
@@ -54,20 +69,142 @@ class FTMessageClient:
         await self.store.init()
         await self.trust.init()
 
-        self.discovery = BroadcastDiscovery(
-            on_channel=self._on_channel_discovered_sync,
-        )
-        self.discovery.local_ip = self._resolve_local_ip()
-        try:
-            await asyncio.to_thread(self.discovery.start)
-        except RuntimeError as exc:
-            await self.events_queue.put(f"⚠️ Découverte réseau indisponible: {exc}")
+        if self.relay_url:
+            await self._connect_relay()
+        else:
+            self.discovery = BroadcastDiscovery(
+                on_channel=self._on_channel_discovered_sync,
+            )
+            self.discovery.local_ip = self._resolve_local_ip()
+            try:
+                await asyncio.to_thread(self.discovery.start)
+            except RuntimeError as exc:
+                await self.events_queue.put(f"⚠️ Découverte réseau indisponible: {exc}")
         await self.events_queue.put("Client prêt. Tape /help pour les commandes.")
 
     async def stop(self) -> None:
         await self.leave_channel()
+        if self.ws:
+            await self.ws.close()
+            self.ws = None
+        if self._relay_task:
+            self._relay_task.cancel()
         if self.discovery:
             await asyncio.to_thread(self.discovery.stop)
+
+    async def _connect_relay(self) -> None:
+        try:
+            import websockets
+        except ImportError:
+            await self.events_queue.put("⚠️ websockets non installé, mode relais inactif.")
+            return
+
+        try:
+            self.ws = await websockets.connect(self.relay_url)
+            await self.ws.send(json.dumps({"type": "REGISTER", "login": self.login}))
+            raw = await self.ws.recv()
+            resp = json.loads(raw)
+            if resp.get("type") == "REGISTERED":
+                await self.events_queue.put(f"Connecté au relais {self.relay_url}")
+                self._relay_task = asyncio.create_task(self._relay_loop())
+                await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
+            else:
+                await self.events_queue.put(f"⚠️ Relais refusé: {resp.get('reason')}")
+        except Exception as e:
+            await self.events_queue.put(f"⚠️ Erreur relais: {e}")
+
+    async def _relay_loop(self) -> None:
+        try:
+            async for raw in self.ws:
+                try:
+                    frame = json.loads(raw)
+                except Exception:
+                    continue
+                ftype = frame.get("type")
+
+                if ftype == "CHANNEL_LIST":
+                    self._relay_channels = []
+                    for c in frame.get("channels", []):
+                        self._relay_channels.append(DiscoveredChannel(
+                            name=c["name"], host_ip="relay", host_port=0,
+                            is_public=c["is_public"], user_count=c["user_count"],
+                            max_users=c["max_users"], last_seen=time.time(),
+                        ))
+
+                elif ftype == "MESSAGE":
+                    sender = frame.get("sender_login", "")
+                    payload = frame.get("payload", "")
+                    ts = frame.get("timestamp", time.time())
+                    decrypted = payload
+                    if self.room_key and payload.startswith("ENCRYPTED:"):
+                        try:
+                            decrypted = decrypt_symmetric(payload[len("ENCRYPTED:"):], self.room_key)
+                        except Exception:
+                            decrypted = "[déchiffrement échoué]"
+                    await self.incoming_queue.put((sender, decrypted, ts))
+                    if self._relay_current_channel:
+                        await self.store.add_channel_message(self._relay_current_channel, sender, decrypted, ts)
+
+                elif ftype == "PRIVATE_MESSAGE":
+                    sender = frame.get("sender_login", "")
+                    payload = frame.get("payload", "")
+                    ts = frame.get("timestamp", time.time())
+                    await self.incoming_queue.put((sender, f"[MP←{sender}] {payload}", ts))
+
+                elif ftype == "USER_JOINED":
+                    login = frame.get("login")
+                    if login not in self._relay_members:
+                        self._relay_members.append(login)
+                    await self.events_queue.put(f"{login} a rejoint le salon")
+                    # Send room key if we are host (simple version: we don't handle pubkeys via relay yet)
+
+                elif ftype == "USER_LEFT":
+                    login = frame.get("login")
+                    if login in self._relay_members:
+                        self._relay_members.remove(login)
+                    await self.events_queue.put(f"{login} a quitté le salon")
+
+                elif ftype in ("CHANNEL_CLOSED", "LEFT", "KICKED"):
+                    if ftype == "CHANNEL_CLOSED":
+                        await self.events_queue.put(f"Salon fermé: {frame.get('reason', '')}")
+                    elif ftype == "LEFT":
+                        await self.events_queue.put("Salon quitté")
+                    elif ftype == "KICKED":
+                        await self.events_queue.put(f"Expulsé: {frame.get('reason', '')}")
+                    self.is_hosting = False
+                    self.room_key = None
+                    self._relay_current_channel = None
+                    self._relay_members = []
+                    await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
+
+                elif ftype == "JOIN_ACCEPTED":
+                    self._relay_current_channel = frame.get("channel_name", "")
+                    self._relay_members = frame.get("members", [])
+                    if self._pending_join and not self._pending_join.done():
+                        self._pending_join.set_result(("connected", self._relay_current_channel))
+
+                elif ftype == "JOIN_REJECTED":
+                    if self._pending_join and not self._pending_join.done():
+                        self._pending_join.set_result(("rejected", frame.get("reason", "")))
+
+                elif ftype == "CHANNEL_CREATED":
+                    self._relay_current_channel = frame.get("channel_name", "")
+                    self._relay_members = frame.get("members", [])
+                    self.is_hosting = True
+                    if self._pending_create and not self._pending_create.done():
+                        self._pending_create.set_result("created")
+
+                elif ftype == "ERROR":
+                    reason = frame.get("reason", "")
+                    await self.events_queue.put(f"⚠️ Erreur relais: {reason}")
+                    if self._pending_create and not self._pending_create.done():
+                        self._pending_create.set_result(f"error: {reason}")
+                    if self._pending_join and not self._pending_join.done():
+                        self._pending_join.set_result(("error", reason))
+
+        except Exception as e:
+            await self.events_queue.put(f"⚠️ Déconnecté du relais: {e}")
+            self.ws = None
 
     def _resolve_local_ip(self) -> str:
         if self.local_ip:
@@ -124,8 +261,25 @@ class FTMessageClient:
     async def create_channel(
         self, name: str, password: str, max_users: int, is_public: bool,
     ) -> str:
-        if self.channel_server or self.channel_client:
+        if self.channel_server or self.channel_client or self._relay_current_channel:
             return "already_in_channel"
+
+        self.room_key = generate_room_key()
+
+        if self.ws:
+            self._pending_create = asyncio.Future()
+            await self.ws.send(json.dumps({
+                "type": "CREATE_CHANNEL",
+                "name": name,
+                "password": password,
+                "max_users": max_users,
+                "is_public": is_public,
+            }))
+            status = await self._pending_create
+            if status == "created":
+                await self.events_queue.put(f"Salon '{name}' créé sur le relais (max {max_users}, {'public' if is_public else 'privé'})")
+                await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
+            return status
 
         local_ip = self._resolve_local_ip()
         self.room_key = generate_room_key()
@@ -196,8 +350,26 @@ class FTMessageClient:
     async def join_channel(
         self, host_ip: str, host_port: int, password: str,
     ) -> tuple[str, str]:
-        if self.channel_server or self.channel_client:
+        if self.channel_server or self.channel_client or self._relay_current_channel:
             return "already_in_channel", ""
+
+        if self.ws:
+            # En mode relais, host_ip est utilisé comme nom de salon pour la compatibilité
+            self._pending_join = asyncio.Future()
+            await self.ws.send(json.dumps({
+                "type": "JOIN",
+                "channel": host_ip,
+                "password": password,
+            }))
+            status, detail = await self._pending_join
+            if status == "connected":
+                # Load history
+                history = await self.store.list_channel_messages(detail, limit=20)
+                for sender, payload, ts in history:
+                    await self.incoming_queue.put((sender, payload, ts))
+                await self.events_queue.put(f"Connecté au salon '{detail}' via le relais")
+                await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
+            return status, detail
 
         def on_join(login: str) -> None:
             if self._loop:
@@ -270,6 +442,10 @@ class FTMessageClient:
 
     async def leave_channel(self) -> None:
         self.room_key = None
+        if self.ws and self._relay_current_channel:
+            await self.ws.send(json.dumps({"type": "LEAVE"}))
+            return
+
         if self.channel_client:
             await self.channel_client.disconnect()
             self.channel_client = None
@@ -285,6 +461,21 @@ class FTMessageClient:
             await self.events_queue.put("Salon fermé")
 
     async def send_channel_message(self, message: str) -> str:
+        if self.ws and self._relay_current_channel:
+            payload = message
+            if self.room_key:
+                try:
+                    payload = "ENCRYPTED:" + encrypt_symmetric(message, self.room_key)
+                except Exception:
+                    pass
+            await self.ws.send(json.dumps({
+                "type": "MESSAGE",
+                "payload": payload,
+            }))
+            await self.incoming_queue.put((self.login, message, time.time()))
+            await self.store.add_channel_message(self._relay_current_channel, self.login, message, time.time())
+            return "sent"
+
         if self.channel_server:
             ok = await self.channel_server.local_message(self.login, message)
             if ok:
@@ -301,18 +492,33 @@ class FTMessageClient:
         return "not_in_channel"
 
     async def kick_member(self, login: str) -> str:
+        if self.ws and self._relay_current_channel and self.is_hosting:
+            await self.ws.send(json.dumps({"type": "KICK", "target_login": login}))
+            return "kicked"
         if not self.channel_server:
             return "not_hosting"
         ok = await self.channel_server.kick(login)
         return "kicked" if ok else "not_found"
 
     async def ban_member(self, login: str) -> str:
+        if self.ws and self._relay_current_channel and self.is_hosting:
+            await self.ws.send(json.dumps({"type": "BAN", "target_login": login}))
+            return "banned"
         if not self.channel_server:
             return "not_hosting"
         ok = await self.channel_server.ban(login)
         return "banned" if ok else "not_found"
 
     async def send_private_message(self, target: str, message: str) -> str:
+        if self.ws and self._relay_current_channel:
+            await self.ws.send(json.dumps({
+                "type": "PRIVATE_MESSAGE",
+                "target_login": target,
+                "payload": message,
+            }))
+            await self.incoming_queue.put((self.login, f"[MP→{target}] {message}", time.time()))
+            return "sent"
+
         if self.channel_server:
             frame = {
                 "type": "PRIVATE_MESSAGE",
@@ -346,11 +552,15 @@ class FTMessageClient:
         return "not_in_channel"
 
     def list_channels(self) -> list[DiscoveredChannel]:
+        if self.ws:
+            return self._relay_channels
         if self.discovery:
             return self.discovery.get_channels()
         return []
 
     def list_members(self) -> list[str]:
+        if self.ws and self._relay_current_channel:
+            return self._relay_members
         if self.channel_client:
             return self.channel_client.members
         if self.channel_server:
@@ -358,6 +568,8 @@ class FTMessageClient:
         return []
 
     def current_channel_name(self) -> str:
+        if self.ws and self._relay_current_channel:
+            return self._relay_current_channel
         if self.channel_client:
             return self.channel_client.channel_name
         if self.channel_server:
