@@ -54,6 +54,7 @@ class FTMessageClient:
         self._relay_channels: list[DiscoveredChannel] = []
         self._relay_current_channel: str | None = None
         self._relay_members: list[str] = []
+        self._relay_rate_limits: list[float] = []
         self._pending_join: asyncio.Future | None = None
         self._pending_create: asyncio.Future | None = None
 
@@ -267,6 +268,7 @@ class FTMessageClient:
         self.room_key = generate_room_key()
 
         if self.ws:
+            self.room_key = None  # Désactive le chiffrement de bout en bout en mode relais
             self._pending_create = asyncio.Future()
             await self.ws.send(json.dumps({
                 "type": "CREATE_CHANNEL",
@@ -460,8 +462,18 @@ class FTMessageClient:
             self.is_hosting = False
             await self.events_queue.put("Salon fermé")
 
+    def _check_relay_rate(self) -> bool:
+        now = time.time()
+        self._relay_rate_limits = [ts for ts in self._relay_rate_limits if now - ts < 10.0]
+        if len(self._relay_rate_limits) >= 10:
+            return False
+        self._relay_rate_limits.append(now)
+        return True
+
     async def send_channel_message(self, message: str) -> str:
         if self.ws and self._relay_current_channel:
+            if not self._check_relay_rate():
+                return "rate_limited"
             payload = message
             if self.room_key:
                 try:

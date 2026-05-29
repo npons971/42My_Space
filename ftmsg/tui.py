@@ -349,6 +349,8 @@ class FtMsgApp(App[None]):
             pass
         elif status == "not_in_channel":
             log.write(f"[red][{now}] Tu n'es plus dans le salon[/red]")
+        elif status == "rate_limited":
+            log.write(f"[yellow][{now}] Doucement ! Tu envoies des messages trop vite.[/yellow]")
         else:
             log.write(f"[red][{now}] Envoi impossible ({status})[/red]")
         event.input.value = ""
