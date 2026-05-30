@@ -335,6 +335,12 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
+        if content.startswith("/"):
+            cmd = content.split(" ", 1)[0]
+            log.write(f"[red][{now}] Commande inconnue: {cmd}[/red]")
+            event.input.value = ""
+            return
+
         cname = self.client.current_channel_name()
         if not cname:
             log.write(
