@@ -147,12 +147,14 @@ class FtMsgApp(App[None]):
         now = time.strftime("%H:%M:%S")
         log = self.query_one("#messages", RichLog)
 
-        if content == "/quit":
+        cmd = content.split(" ", 1)[0]
+
+        if cmd == "/quit":
             await self.client.stop()
             self.exit()
             return
 
-        if content == "/help":
+        if cmd == "/help":
             log.write(
                 "[bold magenta]Commandes:[/bold magenta]\n"
                 "  [bold]/create <nom> <max> [password][/bold]  — créer un salon\n"
@@ -171,7 +173,7 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
-        if content == "/list":
+        if cmd == "/list":
             channels = self.client.list_channels()
             if not channels:
                 log.write(f"[magenta][{now}] Aucun salon trouvé sur le réseau[/magenta]")
@@ -188,7 +190,7 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
-        if content.startswith("/join "):
+        if cmd == "/join":
             parts = content.split(" ")
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /join <nom|ip> [port] [password] ou /join <index> [password][/red]")
@@ -240,12 +242,12 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
-        if content == "/leave":
+        if cmd == "/leave":
             await self.client.leave_channel()
             event.input.value = ""
             return
 
-        if content == "/peers":
+        if cmd == "/peers":
             members = self.client.list_members()
             cname = self.client.current_channel_name()
             if not cname:
@@ -259,7 +261,7 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
-        if content.startswith("/kick "):
+        if cmd == "/kick":
             parts = content.split(" ", 1)
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /kick <login>[/red]")
@@ -275,7 +277,7 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
-        if content.startswith("/ban "):
+        if cmd == "/ban":
             parts = content.split(" ", 1)
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /ban <login>[/red]")
@@ -291,7 +293,7 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
-        if content.startswith("/msg "):
+        if cmd == "/msg":
             parts = content.split(" ", 2)
             if len(parts) < 3:
                 log.write(f"[red][{now}] usage: /msg <login> <message>[/red]")
@@ -310,7 +312,7 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
-        if content.startswith("/create "):
+        if cmd == "/create":
             parts = content.split(" ", 3)
             if len(parts) < 3:
                 log.write(f"[red][{now}] usage: /create <nom> <max> [password][/red]")
@@ -335,8 +337,7 @@ class FtMsgApp(App[None]):
             event.input.value = ""
             return
 
-        if content.startswith("/"):
-            cmd = content.split(" ", 1)[0]
+        if cmd.startswith("/"):
             log.write(f"[red][{now}] Commande inconnue: {cmd}[/red]")
             event.input.value = ""
             return
