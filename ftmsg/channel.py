@@ -51,6 +51,7 @@ class ChannelServer:
         on_message: Callable[[str, str, float], None] | None = None,
         on_member_join: Callable[[str], None] | None = None,
         on_member_leave: Callable[[str], None] | None = None,
+        on_typing: Callable[[str], None] | None = None,
     ) -> None:
         self.name = name
         self.password = password
@@ -60,6 +61,7 @@ class ChannelServer:
         self.on_message = on_message
         self.on_member_join = on_member_join
         self.on_member_leave = on_member_leave
+        self.on_typing = on_typing
 
         self._clients: dict[str, asyncio.StreamWriter] = {}
         self._member_keys: dict[str, str] = {}
@@ -322,6 +324,11 @@ class ChannelServer:
                             except Exception:
                                 logger.debug("PRIVATE_MESSAGE routing failed for %s", target, exc_info=True)
                     continue
+                if ftype == "TYPING":
+                    await self.broadcast({"type": "TYPING", "login": login}, exclude=login)
+                    if self.on_typing:
+                        self.on_typing(login)
+                    continue
                 if ftype == "MESSAGE":
                     if not self._check_rate_limit(login):
                         try:
@@ -372,6 +379,7 @@ class ChannelClient:
         on_member_leave: Callable[[str], None] | None = None,
         on_disconnect: Callable[[str], None] | None = None,
         on_room_key: Callable[[str], None] | None = None,
+        on_typing: Callable[[str], None] | None = None,
     ) -> None:
         self.login = login
         self.on_message = on_message
@@ -379,6 +387,7 @@ class ChannelClient:
         self.on_member_leave = on_member_leave
         self.on_disconnect = on_disconnect
         self.on_room_key = on_room_key
+        self.on_typing = on_typing
 
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
@@ -507,6 +516,16 @@ class ChannelClient:
             self._connected = False
             return False
 
+    async def send_typing(self) -> bool:
+        if not self._connected or not self.writer:
+            return False
+        try:
+            await write_frame(self.writer, {"type": "TYPING"})
+            return True
+        except (OSError, ConnectionError):
+            self._connected = False
+            return False
+
     async def _read_loop(self) -> None:
         try:
             while self._connected and self.reader:
@@ -573,6 +592,11 @@ class ChannelClient:
                     ts = float(frame.get("timestamp", time.time()))
                     if self.on_message and sender:
                         self.on_message(sender, f"[MP] {payload}", ts)
+
+                elif ftype == "TYPING":
+                    sender = str(frame.get("login", ""))
+                    if sender and self.on_typing:
+                        self.on_typing(sender)
 
                 else:
                     pass

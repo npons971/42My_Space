@@ -349,6 +349,14 @@ async def _handle_ban(client: ClientState, frame: dict) -> None:
     logger.info("%s banned %s from '%s'", client.login, target_login, ch.name)
     await _broadcast_list()
 
+async def _handle_typing(client: ClientState, frame: dict) -> None:
+    if not client.channel_name:
+        return
+    ch = _channels.get(client.channel_name)
+    if not ch:
+        return
+    await _broadcast(ch, {"type": "TYPING", "login": client.login}, exclude=client.login)
+
 
 _HANDLERS = {
     "LIST_CHANNELS": _handle_list,
@@ -359,6 +367,7 @@ _HANDLERS = {
     "PRIVATE_MESSAGE": _handle_pm,
     "KICK": _handle_kick,
     "BAN": _handle_ban,
+    "TYPING": _handle_typing,
 }
 
 

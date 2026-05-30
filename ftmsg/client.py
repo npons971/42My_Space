@@ -58,6 +58,9 @@ class FTMessageClient:
         self._pending_join: asyncio.Future | None = None
         self._pending_create: asyncio.Future | None = None
 
+        self.typing_users: dict[str, float] = {}
+        self.last_typing_sent: float = 0
+
         self.is_hosting = False
         self.room_key: bytes | None = None
 
@@ -163,8 +166,12 @@ class FTMessageClient:
                     login = frame.get("login")
                     if login in self._relay_members:
                         self._relay_members.remove(login)
-                    await self.events_queue.put(f"{login} a quitté le salon")
+                    await self._on_member_leave(login)
 
+                elif ftype == "TYPING":
+                    sender = str(frame.get("login", ""))
+                    if sender:
+                        self._on_typing(sender)
                 elif ftype in ("CHANNEL_CLOSED", "LEFT", "KICKED"):
                     if ftype == "CHANNEL_CLOSED":
                         await self.events_queue.put(f"Salon fermé: {frame.get('reason', '')}")
@@ -242,6 +249,22 @@ class FTMessageClient:
                 )
         return on_msg
 
+    def _on_member_leave(self, login: str) -> None:
+        if login in self.typing_users:
+            del self.typing_users[login]
+        self.events_queue.put_nowait(f"{login} a quitté le salon")
+
+    def _on_typing(self, sender: str) -> None:
+        self.typing_users[sender] = time.time()
+
+    def _on_disconnect(self, reason: str) -> None:
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(
+                self.events_queue.put(f"Déconnecté du salon: {reason}"),
+                self._loop,
+            )
+        self.channel_client = None
+
     def _encrypt_and_send_room_key(self, login: str, pubkey_b64: str) -> None:
         if not self.room_key or not self.channel_server:
             return
@@ -309,23 +332,12 @@ class FTMessageClient:
             if self.channel_server and login in self.channel_server._member_keys:
                 self._encrypt_and_send_room_key(login, self.channel_server._member_keys[login])
 
-        def on_leave(login: str) -> None:
-            _update_beacon()
-            if self._loop:
-                asyncio.run_coroutine_threadsafe(
-                    self.events_queue.put(f"{login} a quitté le salon"),
-                    self._loop,
-                )
-
         self.channel_server = ChannelServer(
-            name=name,
-            password=password,
-            max_users=max_users,
-            is_public=is_public,
-            owner_login=self.login,
+            name, password, max_users, is_public, self.login,
             on_message=self._on_msg_cb(name),
             on_member_join=on_join,
-            on_member_leave=on_leave,
+            on_member_leave=self._on_member_leave,
+            on_typing=self._on_typing,
         )
 
         port = await self.channel_server.start(port=0)
@@ -380,21 +392,6 @@ class FTMessageClient:
                     self._loop,
                 )
 
-        def on_leave(login: str) -> None:
-            if self._loop:
-                asyncio.run_coroutine_threadsafe(
-                    self.events_queue.put(f"{login} a quitté le salon"),
-                    self._loop,
-                )
-
-        def on_disc(reason: str) -> None:
-            if self._loop:
-                asyncio.run_coroutine_threadsafe(
-                    self.events_queue.put(f"Déconnecté du salon: {reason}"),
-                    self._loop,
-                )
-            self.channel_client = None
-
         def on_room_key(encrypted_key: str) -> None:
             try:
                 raw = decrypt(encrypted_key, self.enc_private_key)
@@ -414,9 +411,10 @@ class FTMessageClient:
         self.channel_client = ChannelClient(
             login=self.login,
             on_member_join=on_join,
-            on_member_leave=on_leave,
-            on_disconnect=on_disc,
+            on_member_leave=self._on_member_leave,
+            on_disconnect=self._on_disconnect,
             on_room_key=on_room_key,
+            on_typing=self._on_typing,
         )
 
         my_pubkey = base64.b64encode(bytes(self.enc_public_key)).decode("utf-8")
@@ -469,6 +467,27 @@ class FTMessageClient:
             return False
         self._relay_rate_limits.append(now)
         return True
+
+    def get_typing_users(self) -> list[str]:
+        now = time.time()
+        self.typing_users = {u: t for u, t in self.typing_users.items() if now - t < 3.0}
+        return list(self.typing_users.keys())
+
+    async def send_typing_indicator(self) -> None:
+        now = time.time()
+        if now - self.last_typing_sent < 3.0:
+            return
+        self.last_typing_sent = now
+        
+        if self.ws and self._relay_current_channel:
+            try:
+                await self.ws.send(json.dumps({"type": "TYPING"}))
+            except Exception:
+                pass
+        elif self.channel_client:
+            await self.channel_client.send_typing()
+        elif self.channel_server:
+            await self.channel_server.broadcast({"type": "TYPING", "login": self.login}, exclude=self.login)
 
     async def send_channel_message(self, message: str) -> str:
         if self.ws and self._relay_current_channel:

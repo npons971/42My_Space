@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import time
 
 from textual.app import App, ComposeResult
@@ -13,6 +14,13 @@ _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
     "/msg ", "/kick ", "/ban ", "/help", "/quit",
 ]
+
+
+def os_notify(title: str, msg: str) -> None:
+    try:
+        subprocess.Popen(["notify-send", title, msg])
+    except Exception:
+        pass
 
 
 class FtMsgApp(App[None]):
@@ -130,6 +138,15 @@ class FtMsgApp(App[None]):
                 mb_text += "  (Vide?)"
             for m in members:
                 mb_text += f"  • {m}\n"
+                
+        typing_users = self.client.get_typing_users()
+        typing_users = [u for u in typing_users if u != self.login]
+        if typing_users:
+            if len(typing_users) == 1:
+                mb_text += f"\n[dim italic]  {typing_users[0]} écrit...[/dim italic]"
+            else:
+                mb_text += f"\n[dim italic]  Plusieurs écrivent...[/dim italic]"
+
         self.query_one("#members_box", Static).update(mb_text)
 
     async def _startup(self) -> None:
@@ -155,7 +172,16 @@ class FtMsgApp(App[None]):
             new_messages = True
             ts_str = time.strftime("%H:%M:%S", time.localtime(ts))
             prefix = "moi" if sender == self.login else sender
-            log.write(f"[green][{ts_str}] {prefix}:[/green] {message}")
+            
+            if sender != self.login and message.startswith("[MP] "):
+                log.write(f"[cyan][{ts_str}] {prefix}:[/cyan] {message}")
+                os_notify("Nouveau MP", f"{sender} t'a envoyé un message privé.")
+            elif sender != self.login and f"@{self.login}" in message:
+                highlighted = message.replace(f"@{self.login}", f"[bold red]@{self.login}[/bold red]")
+                log.write(f"[green][{ts_str}] {prefix}:[/green] {highlighted}")
+                os_notify("Mention 42msg", f"{sender} t'a mentionné.")
+            else:
+                log.write(f"[green][{ts_str}] {prefix}:[/green] {message}")
 
         while True:
             try:
@@ -179,6 +205,11 @@ class FtMsgApp(App[None]):
     def on_input_changed(self, event: Input.Changed) -> None:
         suggestions = self.query_one("#suggestions", Static)
         val = event.value
+        
+        if val and not val.startswith("/"):
+            if self.client.current_channel_name():
+                self.run_worker(self.client.send_typing_indicator())
+
         if val.startswith("/"):
             matches = [c for c in _COMMANDS if c.startswith(val)]
             if matches:
