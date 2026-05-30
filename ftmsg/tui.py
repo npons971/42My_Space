@@ -23,6 +23,25 @@ class FtMsgApp(App[None]):
         layout: vertical;
     }
 
+    #main_area {
+        layout: horizontal;
+        height: 1fr;
+    }
+
+    #sidebar {
+        width: 35;
+        height: 1fr;
+        dock: left;
+        border-right: solid $primary;
+        padding: 0 1;
+        layout: vertical;
+    }
+
+    #chat_area {
+        height: 1fr;
+        layout: vertical;
+    }
+
     #chat {
         height: 1fr;
         padding: 0 1;
@@ -50,14 +69,20 @@ class FtMsgApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Container(id="chat"):
-            yield RichLog(id="messages", wrap=True, markup=True)
-        with Container(id="compose"):
-            yield Static("", id="suggestions")
-            yield Input(
-                placeholder="Tape un message ou une commande…",
-                id="message_input",
-            )
+        with Container(id="main_area"):
+            with Container(id="sidebar"):
+                yield Static("Chargement...", id="status_box")
+                yield Static("", id="channels_box")
+                yield Static("", id="members_box")
+            with Container(id="chat_area"):
+                with Container(id="chat"):
+                    yield RichLog(id="messages", wrap=True, markup=True)
+                with Container(id="compose"):
+                    yield Static("", id="suggestions")
+                    yield Input(
+                        placeholder="Tape un message ou une commande…",
+                        id="message_input",
+                    )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -70,6 +95,42 @@ class FtMsgApp(App[None]):
         self.query_one("#message_input", Input).focus()
         self.run_worker(self._startup())
         self.set_interval(0.2, self._drain_queues)
+        self.set_interval(1.0, self._update_sidebar)
+
+    def _update_sidebar(self) -> None:
+        cname = self.client.current_channel_name()
+        net_mode = "Relais" if self.client.relay_url else "Direct (P2P)"
+        role = "Hôte" if self.client.is_hosting else "Invité" if cname else "-"
+        
+        status_text = (
+            f"[bold cyan]👤 {self.login}[/bold cyan]\n"
+            f"[dim]Réseau:[/dim] {net_mode}\n"
+            f"[dim]Rôle:[/dim] {role}\n"
+            f"[dim]Salon:[/dim] [bold]{cname or 'Aucun'}[/bold]"
+        )
+        self.query_one("#status_box", Static).update(status_text)
+        
+        channels = self.client.list_channels()
+        ch_text = "\n[bold magenta]🌍 Salons actifs[/bold magenta]\n"
+        if not channels:
+            ch_text += "  (Aucun salon)"
+        else:
+            for i, ch in enumerate(channels):
+                vis = "🔓" if ch.is_public else "🔒"
+                ch_text += f"  [bold]{ch.name}[/bold] {vis}\n"
+                ch_text += f"  └ {ch.user_count}/{ch.max_users} | /join {i}\n"
+        self.query_one("#channels_box", Static).update(ch_text)
+        
+        mb_text = "\n[bold yellow]👥 Membres du salon[/bold yellow]\n"
+        if not cname:
+            mb_text += "  (Non connecté)"
+        else:
+            members = self.client.list_members()
+            if not members:
+                mb_text += "  (Vide?)"
+            for m in members:
+                mb_text += f"  • {m}\n"
+        self.query_one("#members_box", Static).update(mb_text)
 
     async def _startup(self) -> None:
         await self.client.start()
