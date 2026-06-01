@@ -3,23 +3,43 @@
 Chat en réseau local par salons. Découverte par broadcast UDP, messages
 sur TCP. Pas de serveur central — chaque salon est hébergé par son créateur.
 
-## Quick start
+## Installation en une ligne (curl)
 
 ```bash
-git clone <url_du_repo>
+curl -fsSL https://raw.githubusercontent.com/npons972/42My_Space/master/install.sh | bash
+```
+
+Puis relance ton shell ou source ton rc :
+
+```bash
+source ~/.zshrc   # ou ~/.bashrc
+```
+
+Lance l'application :
+
+```bash
+42msg
+```
+
+Avec un pseudo spécifique :
+
+```bash
+42msg --login mon_login
+```
+
+---
+
+## Installation manuelle (git + make)
+
+```bash
+git clone https://github.com/npons972/42My_Space.git
 cd 42My_Space
 make install   # crée le venv, installe les deps localement, configure l'alias
 source ~/.zshrc
 42msg
 ```
 
-Ou avec un pseudo spécifique:
-
-```bash
-42msg --login mon_login
-```
-
-## Installation & venv
+## Gestion du venv
 
 Les dépendances s'installent **exclusivement** dans un venv local (`.venv/`).
 Aucun package n'est installé globalement sur le système.
@@ -44,11 +64,23 @@ Aucun package n'est installé globalement sur le système.
 | `/join <index> <password>` | Rejoindre depuis l'index `/list` |
 | `/leave` | Quitter le salon |
 | `/peers` | Voir les membres du salon |
-| `/name <login>` | Changer son pseudo |
+| `/msg <login> <text>` | Message privé |
+| `/kick <login>` | Expulser (hôte) |
+| `/ban <login>` | Bannir (hôte) |
+| `/settings` | Paramètres (Ctrl+S) |
 | `/help` | Aide |
 | `/quit` | Quitter |
 
 Tape simplement un message puis Entrée pour l'envoyer dans le salon actif.
+
+## Raccourcis clavier
+
+| Raccourci | Action |
+|---|---|
+| `Ctrl+Q` | Quitter |
+| `Ctrl+B` | Afficher/masquer la sidebar |
+| `Ctrl+S` | Ouvrir les paramètres |
+| `Tab` | Autocomplétion des commandes |
 
 ## Principe
 
@@ -56,10 +88,10 @@ Tape simplement un message puis Entrée pour l'envoyer dans le salon actif.
 - **Salon privé** : protégé par mot de passe (par défaut).
 - **Salon public** : pas de mot de passe, accessible à tous.
 - Le créateur héberge le salon : s'il quitte, le salon est fermé.
-- Chiffrement des clés (NaCl/Curve25519) pour l'identité.
+- Chiffrement de bout en bout des messages via clés NaCl/Curve25519 (mode Direct & Relais).
 
 ## Prérequis réseau
 
-- Broadcast UDP autorisé sur le réseau (pour la découverte).
-- Connexion TCP entrante autorisée vers le port du créateur.
-- Si le réseau bloque le direct, utilise un tunnel SSH (voir `scripts/`).
+- Broadcast UDP autorisé sur le réseau (pour la découverte en mode Direct).
+- Connexion TCP entrante autorisée vers le port du créateur (mode Direct).
+- Si le réseau bloque le direct, utilise le mode relais (`--relay`).
