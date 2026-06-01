@@ -54,6 +54,7 @@ class FTMessageClient:
         self._relay_channels: list[DiscoveredChannel] = []
         self._relay_current_channel: str | None = None
         self._relay_members: list[str] = []
+        self._relay_member_keys: dict[str, str] = {}
         self._relay_rate_limits: list[float] = []
         self._pending_join: asyncio.Future | None = None
         self._pending_create: asyncio.Future | None = None
@@ -166,7 +167,33 @@ class FTMessageClient:
                     if login not in self._relay_members:
                         self._relay_members.append(login)
                     await self.events_queue.put(f"{login} a rejoint le salon")
-                    # Send room key if we are host (simple version: we don't handle pubkeys via relay yet)
+
+                elif ftype == "PUBLIC_KEY":
+                    login = frame.get("login")
+                    pubkey_b64 = frame.get("encryption_pubkey_b64", "")
+                    if login and pubkey_b64:
+                        self._relay_member_keys[login] = pubkey_b64
+                        if self.is_hosting and self.room_key and login != self.login:
+                            try:
+                                encrypted_key = encrypt(self.room_key, pubkey_b64)
+                                await self.ws.send(json.dumps({
+                                    "type": "ROOM_KEY",
+                                    "target_login": login,
+                                    "encrypted_key": encrypted_key,
+                                }))
+                            except Exception:
+                                logger.debug("room key encryption failed for %s", login, exc_info=True)
+
+                elif ftype == "ROOM_KEY":
+                    target = frame.get("target_login", "")
+                    if target == self.login:
+                        encrypted_key = frame.get("encrypted_key", "")
+                        try:
+                            raw = decrypt(encrypted_key, self.enc_private_key)
+                            self.room_key = raw
+                            await self.events_queue.put("Clé de salon reçue — messages chiffrés (mode relais)")
+                        except Exception:
+                            await self.events_queue.put("⚠️ Impossible de déchiffrer la clé de salon (mode relais)")
 
                 elif ftype == "USER_LEFT":
                     login = frame.get("login")
@@ -189,6 +216,7 @@ class FTMessageClient:
                     self.room_key = None
                     self._relay_current_channel = None
                     self._relay_members = []
+                    self._relay_member_keys.clear()
                     if self.ws:
                         try:
                             await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
@@ -298,7 +326,6 @@ class FTMessageClient:
         self.room_key = generate_room_key()
 
         if self.ws:
-            self.room_key = None  # Désactive le chiffrement de bout en bout en mode relais
             self._pending_create = asyncio.Future()
             await self.ws.send(json.dumps({
                 "type": "CREATE_CHANNEL",
@@ -386,6 +413,16 @@ class FTMessageClient:
             if status == "connected":
                 await self.events_queue.put(f"Connecté au salon '{detail}' via le relais")
                 await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
+                # Broadcast our public key so the host can send us the room key
+                my_pubkey = base64.b64encode(bytes(self.enc_public_key)).decode("utf-8")
+                try:
+                    await self.ws.send(json.dumps({
+                        "type": "PUBLIC_KEY",
+                        "login": self.login,
+                        "encryption_pubkey_b64": my_pubkey,
+                    }))
+                except Exception:
+                    pass
             return status, detail
 
         def on_join(login: str) -> None:
@@ -440,6 +477,7 @@ class FTMessageClient:
 
     async def leave_channel(self) -> None:
         self.room_key = None
+        self._relay_member_keys.clear()
         if self.ws and self._relay_current_channel:
             await self.ws.send(json.dumps({"type": "LEAVE"}))
             return

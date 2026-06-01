@@ -170,7 +170,12 @@ class SettingsScreen(ModalScreen):
 
         cname = client.current_channel_name()
         role = "Hôte" if client.is_hosting else "Invité" if cname else "-"
-        encryption = "Actif 🔒" if client.room_key else "Inactif 🔓"
+        if not cname:
+            encryption = "Aucun salon actif"
+        elif client.room_key:
+            encryption = "Actif 🔒 (clé de salon établie)"
+        else:
+            encryption = "En attente de clé..."
         members = len(client.list_members())
         channel = (
             f"[bold cyan]Salon actif[/bold cyan]\n"
