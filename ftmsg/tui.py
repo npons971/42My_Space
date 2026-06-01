@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 import subprocess
 import time
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
+from textual.reactive import reactive
 from textual.widgets import Footer, Header, Input, RichLog, Static
 
 from .client import FTMessageClient, default_login
@@ -15,6 +18,28 @@ _COMMANDS = [
     "/msg ", "/kick ", "/ban ", "/help", "/quit",
 ]
 
+_USER_COLORS = [
+    "#e57373", "#81c784", "#64b5f6", "#fff176", "#ba68c8",
+    "#4db6ac", "#ffb74d", "#90a4ae", "#f06292", "#7986cb",
+    "#a1887f", "#ff8a65", "#4dd0e1", "#aed581", "#ffd54f",
+]
+
+
+def _user_color(login: str) -> str:
+    idx = int(hashlib.md5(login.encode()).hexdigest(), 16) % len(_USER_COLORS)
+    return _USER_COLORS[idx]
+
+
+def _format_message_text(text: str) -> str:
+    """Auto-format URLs and inline code in messages."""
+    # Escape literal brackets so user text doesn't interfere with markup
+    text = text.replace("[", "\\[").replace("]", "\\]")
+    # URLs -> clickable links  (Rich uses [link=URL]text[/link])
+    text = re.sub(r"(https?://[^\s<]+)", r"[link=\1]\1[/link]", text)
+    # Inline code `...`
+    text = re.sub(r"`([^`]+)`", r"[dim italic]`\1`[/dim italic]", text)
+    return text
+
 
 def os_notify(title: str, msg: str) -> None:
     try:
@@ -23,12 +48,67 @@ def os_notify(title: str, msg: str) -> None:
         pass
 
 
+class DragHandle(Static):
+    """Visual handle between sidebar and chat; click to toggle sidebar."""
+
+    DEFAULT_CSS = """
+    DragHandle {
+        width: 1;
+        height: 1fr;
+        color: $text-muted;
+        background: $surface-darken-2;
+        content-align: center middle;
+    }
+    DragHandle:hover {
+        background: $primary-darken-1;
+        color: $text;
+    }
+    """
+
+    def __init__(self, app_ref: FtMsgApp, **kwargs) -> None:
+        super().__init__("│", **kwargs)
+        self.app_ref = app_ref
+        self._dragging = False
+
+    def on_mouse_down(self, event) -> None:
+        self._dragging = True
+        self._last_x = event.screen_x if hasattr(event, "screen_x") else event.x
+        self.capture_mouse()
+        event.stop()
+
+    def on_mouse_up(self, event) -> None:
+        self._dragging = False
+        self.release_mouse()
+        event.stop()
+
+    def on_mouse_move(self, event) -> None:
+        if self._dragging:
+            cur = event.screen_x if hasattr(event, "screen_x") else event.x
+            delta = cur - getattr(self, "_last_x", cur)
+            if delta != 0:
+                self.app_ref.sidebar_width = max(20, min(60, self.app_ref.sidebar_width + delta))
+            self._last_x = cur
+        event.stop()
+
+    def on_click(self, event) -> None:
+        self.app_ref.action_toggle_sidebar()
+        event.stop()
+
+
 class FtMsgApp(App[None]):
     TITLE = "42msg"
+
+    BINDINGS = [
+        ("ctrl+q", "quit", "Quitter"),
+        ("ctrl+b", "toggle_sidebar", "Sidebar"),
+    ]
+
+    sidebar_width = reactive(35)
 
     CSS = """
     Screen {
         layout: vertical;
+        background: $surface;
     }
 
     #main_area {
@@ -39,15 +119,30 @@ class FtMsgApp(App[None]):
     #sidebar {
         width: 35;
         height: 1fr;
-        dock: left;
-        border-right: solid $primary;
+        border-right: solid $primary-darken-1;
         padding: 0 1;
+        background: $surface-darken-1;
         layout: vertical;
     }
 
+    #resize_handle {
+        width: 1;
+        height: 1fr;
+        background: $surface-darken-2;
+        color: $text-muted;
+        content-align: center middle;
+    }
+
+    #resize_handle:hover {
+        background: $primary-darken-1;
+        color: $text;
+    }
+
     #chat_area {
+        width: 1fr;
         height: 1fr;
         layout: vertical;
+        background: $surface;
     }
 
     #chat {
@@ -59,6 +154,8 @@ class FtMsgApp(App[None]):
         dock: bottom;
         height: auto;
         padding: 0 1;
+        background: $surface-darken-1;
+        border-top: solid $primary-darken-2;
     }
 
     #suggestions {
@@ -66,6 +163,21 @@ class FtMsgApp(App[None]):
         display: none;
         color: $text-muted;
         padding: 0 1;
+        background: $surface-darken-1;
+    }
+
+    #status_box {
+        padding: 1 0;
+        border-bottom: solid $primary-darken-2;
+    }
+
+    #channels_box {
+        padding: 1 0;
+        border-bottom: solid $primary-darken-2;
+    }
+
+    #members_box {
+        padding: 1 0;
     }
     """
 
@@ -75,16 +187,41 @@ class FtMsgApp(App[None]):
         self.client = FTMessageClient(self.login)
         self._has_unread = False
 
+    # ------------------------------------------------------------------ #
+    # Reactive watchers
+    # ------------------------------------------------------------------ #
+
+    def watch_sidebar_width(self, width: int) -> None:
+        sidebar = self.query_one("#sidebar", Container)
+        sidebar.styles.width = width
+
+    def action_toggle_sidebar(self) -> None:
+        sidebar = self.query_one("#sidebar", Container)
+        handle = self.query_one("#resize_handle", Static)
+        if sidebar.styles.display == "none":
+            sidebar.styles.display = "block"
+            handle.update("│")
+            self.sidebar_width = getattr(self, "_prev_sidebar_width", 35)
+        else:
+            self._prev_sidebar_width = self.sidebar_width
+            sidebar.styles.display = "none"
+            handle.update("▶")
+
+    # ------------------------------------------------------------------ #
+    # Compose & mount
+    # ------------------------------------------------------------------ #
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Container(id="main_area"):
+        with Horizontal(id="main_area"):
             with Container(id="sidebar"):
                 yield Static("Chargement...", id="status_box")
                 yield Static("", id="channels_box")
                 yield Static("", id="members_box")
+            yield DragHandle(self, id="resize_handle")
             with Container(id="chat_area"):
                 with Container(id="chat"):
-                    yield RichLog(id="messages", wrap=True, markup=True)
+                    yield RichLog(id="messages", wrap=True, markup=True, highlight=True)
                 with Container(id="compose"):
                     yield Static("", id="suggestions")
                     yield Input(
@@ -105,11 +242,15 @@ class FtMsgApp(App[None]):
         self.set_interval(0.2, self._drain_queues)
         self.set_interval(1.0, self._update_sidebar)
 
+    # ------------------------------------------------------------------ #
+    # Sidebar updates
+    # ------------------------------------------------------------------ #
+
     def _update_sidebar(self) -> None:
         cname = self.client.current_channel_name()
         net_mode = "Relais" if self.client.relay_url else "Direct (P2P)"
-        role = "Hôte" if self.client.is_hosting else "Invité" if cname else "-"
-        
+        role = "Hote" if self.client.is_hosting else "Invite" if cname else "-"
+
         status_text = (
             f"[bold cyan]👤 {self.login}[/bold cyan]\n"
             f"[dim]Réseau:[/dim] {net_mode}\n"
@@ -117,9 +258,9 @@ class FtMsgApp(App[None]):
             f"[dim]Salon:[/dim] [bold]{cname or 'Aucun'}[/bold]"
         )
         self.query_one("#status_box", Static).update(status_text)
-        
+
         channels = self.client.list_channels()
-        ch_text = "\n[bold magenta]🌍 Salons actifs[/bold magenta]\n"
+        ch_text = "\n[bold magenta] Salons actifs[/bold magenta]\n"
         if not channels:
             ch_text += "  (Aucun salon)"
         else:
@@ -128,7 +269,7 @@ class FtMsgApp(App[None]):
                 ch_text += f"  [bold]{ch.name}[/bold] {vis}\n"
                 ch_text += f"  └ {ch.user_count}/{ch.max_users} | /join {i}\n"
         self.query_one("#channels_box", Static).update(ch_text)
-        
+
         mb_text = "\n[bold yellow]👥 Membres du salon[/bold yellow]\n"
         if not cname:
             mb_text += "  (Non connecté)"
@@ -137,8 +278,10 @@ class FtMsgApp(App[None]):
             if not members:
                 mb_text += "  (Vide?)"
             for m in members:
-                mb_text += f"  • {m}\n"
-                
+                color = _user_color(m)
+                marker = "●" if m == self.login else "•"
+                mb_text += f"  [bold {color}]{marker} {m}[/bold {color}]\n"
+
         typing_users = self.client.get_typing_users()
         typing_users = [u for u in typing_users if u != self.login]
         if typing_users:
@@ -149,11 +292,14 @@ class FtMsgApp(App[None]):
 
         self.query_one("#members_box", Static).update(mb_text)
 
+    # ------------------------------------------------------------------ #
+    # Networking / queues
+    # ------------------------------------------------------------------ #
+
     async def _startup(self) -> None:
         await self.client.start()
 
     def _is_scrolled_to_bottom(self, log: RichLog) -> bool:
-        # RichLog scroll area check
         try:
             return log.scroll_offset.y >= log.max_scroll_y
         except Exception:
@@ -172,16 +318,21 @@ class FtMsgApp(App[None]):
             new_messages = True
             ts_str = time.strftime("%H:%M:%S", time.localtime(ts))
             prefix = "moi" if sender == self.login else sender
-            
+            user_col = _user_color(prefix)
+            formatted = _format_message_text(message)
+
             if sender != self.login and message.startswith("[MP] "):
-                log.write(f"[cyan][{ts_str}] {prefix}:[/cyan] {message}")
-                os_notify("Nouveau MP", f"{sender} t'a envoyé un message privé.")
+                log.write(f"[cyan][{ts_str}] [bold]{prefix}[/bold]:[/cyan] {formatted}")
+                os_notify("Nouveau MP", f"{sender} t'a envoye un message prive.")
             elif sender != self.login and f"@{self.login}" in message:
-                highlighted = message.replace(f"@{self.login}", f"[bold red]@{self.login}[/bold red]")
-                log.write(f"[green][{ts_str}] {prefix}:[/green] {highlighted}")
-                os_notify("Mention 42msg", f"{sender} t'a mentionné.")
+                highlighted = formatted.replace(
+                    f"@{self.login}",
+                    f"[bold red underline]@{self.login}[/bold red underline]",
+                )
+                log.write(f"[green][{ts_str}] [bold]{prefix}[/bold]:[/green] {highlighted}")
+                os_notify("Mention 42msg", f"{sender} t'a mentionne.")
             else:
-                log.write(f"[green][{ts_str}] {prefix}:[/green] {message}")
+                log.write(f"[{user_col}][{ts_str}] [bold]{prefix}[/bold]:[/{user_col}] {formatted}")
 
         while True:
             try:
@@ -190,7 +341,7 @@ class FtMsgApp(App[None]):
                 break
             new_messages = True
             now = time.strftime("%H:%M:%S")
-            log.write(f"[yellow][{now}] {event}[/yellow]")
+            log.write(f"[dim yellow][{now}] {event}[/dim yellow]")
 
         if new_messages:
             if at_bottom:
@@ -202,10 +353,14 @@ class FtMsgApp(App[None]):
     async def on_unmount(self) -> None:
         await self.client.stop()
 
+    # ------------------------------------------------------------------ #
+    # Input handling
+    # ------------------------------------------------------------------ #
+
     def on_input_changed(self, event: Input.Changed) -> None:
         suggestions = self.query_one("#suggestions", Static)
         val = event.value
-        
+
         if val and not val.startswith("/"):
             if self.client.current_channel_name():
                 self.run_worker(self.client.send_typing_indicator())
@@ -249,18 +404,18 @@ class FtMsgApp(App[None]):
         if cmd == "/help":
             log.write(
                 "[bold magenta]Commandes:[/bold magenta]\n"
-                "  [bold]/create <nom> <max> [password][/bold]  — créer un salon\n"
-                "  [bold]/list[/bold]                          — lister les salons\n"
-                "  [bold]/join <ip> <port> <password>[/bold]   — rejoindre un salon\n"
-                "  [bold]/join <index> <password>[/bold]       — rejoindre depuis /list\n"
-                "  [bold]/leave[/bold]                         — quitter le salon\n"
-                "  [bold]/peers[/bold]                         — membres du salon\n"
-                "  [bold]/msg <login> <text>[/bold]            — message privé\n"
-                "  [bold]/kick <login>[/bold]                  — expulser (hôte)\n"
-                "  [bold]/ban <login>[/bold]                   — bannir (hôte)\n"
-                "  [bold]/help[/bold]                          — cette aide\n"
-                "  [bold]/quit[/bold]                          — quitter\n"
-                "  Tape un message puis Entrée pour l'envoyer dans le salon.",
+        "  [bold]/create <nom> <max> [password][/bold]  — créer un salon\n"
+        "  [bold]/list[/bold]                          — lister les salons\n"
+        "  [bold]/join <ip> <port> <password>[/bold]   — rejoindre un salon\n"
+        "  [bold]/join <index> <password>[/bold]       — rejoindre depuis /list\n"
+        "  [bold]/leave[/bold]                         — quitter le salon\n"
+        "  [bold]/peers[/bold]                         — membres du salon\n"
+        "  [bold]/msg <login> <text>[/bold]            — message privé\n"
+        "  [bold]/kick <login>[/bold]                  — expulser (hôte)\n"
+        "  [bold]/ban <login>[/bold]                   — bannir (hôte)\n"
+        "  [bold]/help[/bold]                          — cette aide\n"
+        "  [bold]/quit[/bold]                          — quitter\n"
+        "  Tape un message puis Entrée pour l'envoyer dans le salon.",
             )
             event.input.value = ""
             return
