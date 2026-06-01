@@ -9,13 +9,14 @@ import time
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Input, RichLog, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, Footer, Header, Input, RichLog, Static
 
 from .client import FTMessageClient, default_login
 
 _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
-    "/msg ", "/kick ", "/ban ", "/help", "/quit",
+    "/msg ", "/kick ", "/ban ", "/settings", "/help", "/quit",
 ]
 
 _USER_COLORS = [
@@ -39,13 +40,6 @@ def _format_message_text(text: str) -> str:
     # Inline code `...`
     text = re.sub(r"`([^`]+)`", r"[dim italic]`\1`[/dim italic]", text)
     return text
-
-
-def os_notify(title: str, msg: str) -> None:
-    try:
-        subprocess.Popen(["notify-send", title, msg])
-    except Exception:
-        pass
 
 
 class DragHandle(Static):
@@ -95,12 +89,151 @@ class DragHandle(Static):
         event.stop()
 
 
+class SettingsScreen(ModalScreen):
+    BINDINGS = [
+        ("ctrl+s", "close", "Fermer"),
+    ]
+
+    DEFAULT_CSS = """
+    SettingsScreen {
+        align: center middle;
+    }
+    #settings_container {
+        width: 70;
+        height: auto;
+        max-height: 80%;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    .settings-title {
+        text-align: center;
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 1;
+    }
+    .settings-row {
+        margin: 0 1;
+    }
+    #settings_close {
+        width: 100%;
+        margin-top: 1;
+    }
+    #settings_toggle_notif {
+        width: 100%;
+        margin-top: 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Container(id="settings_container"):
+            yield Static("⚙️ Paramètres", classes="settings-title")
+            yield Static("", id="settings_identity", classes="settings-row")
+            yield Static("", id="settings_network", classes="settings-row")
+            yield Static("", id="settings_channel", classes="settings-row")
+            yield Static("", id="settings_storage", classes="settings-row")
+            yield Static("", id="settings_prefs", classes="settings-row")
+            yield Static("", id="settings_shortcuts", classes="settings-row")
+            yield Button("Fermer", id="settings_close", variant="primary")
+            yield Button("", id="settings_toggle_notif", variant="default")
+
+    def on_mount(self) -> None:
+        self.update_content()
+
+    def update_content(self) -> None:
+        app = self.app
+        assert isinstance(app, FtMsgApp)
+        client = app.client
+
+        enc_fp = hashlib.sha256(bytes(client.enc_public_key)).hexdigest()[:16] if client.enc_public_key else "N/A"
+        sign_fp = hashlib.sha256(bytes(client.sign_public_key)).hexdigest()[:16] if client.sign_public_key else "N/A"
+        identity = (
+            f"[bold cyan]Identité[/bold cyan]\n"
+            f"  Login: [bold]{client.login}[/bold]\n"
+            f"  Clé chiffrement: {enc_fp}\n"
+            f"  Clé signature: {sign_fp}"
+        )
+        self.query_one("#settings_identity", Static).update(identity)
+
+        mode = "Relais" if client.relay_url else "Direct (P2P)"
+        local_ip = client.local_ip or client._resolve_local_ip()
+        discovery_active = client.discovery is not None and getattr(client.discovery, "_running", False)
+        network = (
+            f"[bold cyan]Réseau[/bold cyan]\n"
+            f"  Mode: [bold]{mode}[/bold]\n"
+            f"  IP locale: {local_ip}\n"
+            f"  Découverte: {'Active' if discovery_active else 'Inactive'}\n"
+            f"  Relay URL: {client.relay_url or 'Non configuré'}"
+        )
+        self.query_one("#settings_network", Static).update(network)
+
+        cname = client.current_channel_name()
+        role = "Hôte" if client.is_hosting else "Invité" if cname else "-"
+        encryption = "Actif 🔒" if client.room_key else "Inactif 🔓"
+        members = len(client.list_members())
+        channel = (
+            f"[bold cyan]Salon actif[/bold cyan]\n"
+            f"  Nom: [bold]{cname or 'Aucun'}[/bold]\n"
+            f"  Rôle: {role}\n"
+            f"  Chiffrement: {encryption}\n"
+            f"  Membres: {members}"
+        )
+        self.query_one("#settings_channel", Static).update(channel)
+
+        db_path = str(client.db_path)
+        db_size = 0
+        try:
+            db_size = os.path.getsize(db_path)
+        except OSError:
+            pass
+        size_str = f"{db_size} o"
+        if db_size > 1024:
+            size_str = f"{db_size / 1024:.1f} Ko"
+        if db_size > 1024 * 1024:
+            size_str = f"{db_size / (1024 * 1024):.1f} Mo"
+        storage = (
+            f"[bold cyan]Stockage[/bold cyan]\n"
+            f"  DB: {db_path}\n"
+            f"  Taille: {size_str}"
+        )
+        self.query_one("#settings_storage", Static).update(storage)
+
+        notif_state = "ON ✅" if app.desktop_notifications else "OFF ❌"
+        prefs = (
+            f"[bold cyan]Préférences[/bold cyan]\n"
+            f"  Notifications desktop: {notif_state}"
+        )
+        self.query_one("#settings_prefs", Static).update(prefs)
+        notif_btn = self.query_one("#settings_toggle_notif", Button)
+        notif_btn.label = "Désactiver notifications" if app.desktop_notifications else "Activer notifications"
+
+        shortcuts = (
+            f"[bold cyan]Raccourcis[/bold cyan]\n"
+            f"  [bold]Ctrl+Q[/bold] Quitter\n"
+            f"  [bold]Ctrl+B[/bold] Sidebar\n"
+            f"  [bold]Ctrl+S[/bold] Paramètres\n"
+            f"  [bold]Tab[/bold]    Autocomplétion\n"
+        )
+        self.query_one("#settings_shortcuts", Static).update(shortcuts)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "settings_close":
+            self.dismiss()
+        elif event.button.id == "settings_toggle_notif":
+            self.app.desktop_notifications = not self.app.desktop_notifications
+            self.update_content()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 class FtMsgApp(App[None]):
     TITLE = "42msg"
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quitter"),
         ("ctrl+b", "toggle_sidebar", "Sidebar"),
+        ("ctrl+s", "toggle_settings", "Paramètres"),
     ]
 
     sidebar_width = reactive(35)
@@ -186,6 +319,7 @@ class FtMsgApp(App[None]):
         self.login = login or default_login()
         self.client = FTMessageClient(self.login)
         self._has_unread = False
+        self.desktop_notifications = True
 
     # ------------------------------------------------------------------ #
     # Reactive watchers
@@ -206,6 +340,17 @@ class FtMsgApp(App[None]):
             self._prev_sidebar_width = self.sidebar_width
             sidebar.styles.display = "none"
             handle.update("▶")
+
+    def action_toggle_settings(self) -> None:
+        self.push_screen(SettingsScreen())
+
+    def _desktop_notify(self, title: str, msg: str) -> None:
+        if not self.desktop_notifications:
+            return
+        try:
+            subprocess.Popen(["notify-send", title, msg])
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # Compose & mount
@@ -247,6 +392,12 @@ class FtMsgApp(App[None]):
     # ------------------------------------------------------------------ #
 
     def _update_sidebar(self) -> None:
+        try:
+            status_box = self.query_one("#status_box", Static)
+            channels_box = self.query_one("#channels_box", Static)
+            members_box = self.query_one("#members_box", Static)
+        except Exception:
+            return
         cname = self.client.current_channel_name()
         net_mode = "Relais" if self.client.relay_url else "Direct (P2P)"
         role = "Hote" if self.client.is_hosting else "Invite" if cname else "-"
@@ -257,7 +408,7 @@ class FtMsgApp(App[None]):
             f"[dim]Rôle:[/dim] {role}\n"
             f"[dim]Salon:[/dim] [bold]{cname or 'Aucun'}[/bold]"
         )
-        self.query_one("#status_box", Static).update(status_text)
+        status_box.update(status_text)
 
         channels = self.client.list_channels()
         ch_text = "\n[bold magenta] Salons actifs[/bold magenta]\n"
@@ -268,7 +419,7 @@ class FtMsgApp(App[None]):
                 vis = "🔓" if ch.is_public else "🔒"
                 ch_text += f"  [bold]{ch.name}[/bold] {vis}\n"
                 ch_text += f"  └ {ch.user_count}/{ch.max_users} | /join {i}\n"
-        self.query_one("#channels_box", Static).update(ch_text)
+        channels_box.update(ch_text)
 
         mb_text = "\n[bold yellow]👥 Membres du salon[/bold yellow]\n"
         if not cname:
@@ -290,7 +441,7 @@ class FtMsgApp(App[None]):
             else:
                 mb_text += f"\n[dim italic]  Plusieurs écrivent...[/dim italic]"
 
-        self.query_one("#members_box", Static).update(mb_text)
+        members_box.update(mb_text)
 
     # ------------------------------------------------------------------ #
     # Networking / queues
@@ -306,7 +457,10 @@ class FtMsgApp(App[None]):
             return True
 
     async def _drain_queues(self) -> None:
-        log = self.query_one("#messages", RichLog)
+        try:
+            log = self.query_one("#messages", RichLog)
+        except Exception:
+            return
         at_bottom = self._is_scrolled_to_bottom(log)
         new_messages = False
 
@@ -323,14 +477,14 @@ class FtMsgApp(App[None]):
 
             if sender != self.login and message.startswith("[MP] "):
                 log.write(f"[cyan][{ts_str}] [bold]{prefix}[/bold]:[/cyan] {formatted}")
-                os_notify("Nouveau MP", f"{sender} t'a envoye un message prive.")
+                self._desktop_notify("Nouveau MP", f"{sender} t'a envoye un message prive.")
             elif sender != self.login and f"@{self.login}" in message:
                 highlighted = formatted.replace(
                     f"@{self.login}",
                     f"[bold red underline]@{self.login}[/bold red underline]",
                 )
                 log.write(f"[green][{ts_str}] [bold]{prefix}[/bold]:[/green] {highlighted}")
-                os_notify("Mention 42msg", f"{sender} t'a mentionne.")
+                self._desktop_notify("Mention 42msg", f"{sender} t'a mentionne.")
             else:
                 log.write(f"[{user_col}][{ts_str}] [bold]{prefix}[/bold]:[/{user_col}] {formatted}")
 
@@ -413,10 +567,16 @@ class FtMsgApp(App[None]):
         "  [bold]/msg <login> <text>[/bold]            — message privé\n"
         "  [bold]/kick <login>[/bold]                  — expulser (hôte)\n"
         "  [bold]/ban <login>[/bold]                   — bannir (hôte)\n"
+        "  [bold]/settings[/bold]                       — paramètres\n"
         "  [bold]/help[/bold]                          — cette aide\n"
         "  [bold]/quit[/bold]                          — quitter\n"
         "  Tape un message puis Entrée pour l'envoyer dans le salon.",
             )
+            event.input.value = ""
+            return
+
+        if cmd == "/settings":
+            self.action_toggle_settings()
             event.input.value = ""
             return
 

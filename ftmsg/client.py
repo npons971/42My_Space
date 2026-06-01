@@ -88,11 +88,15 @@ class FTMessageClient:
 
     async def stop(self) -> None:
         await self.leave_channel()
+        if self._relay_task:
+            self._relay_task.cancel()
+            try:
+                await self._relay_task
+            except asyncio.CancelledError:
+                pass
         if self.ws:
             await self.ws.close()
             self.ws = None
-        if self._relay_task:
-            self._relay_task.cancel()
         if self.discovery:
             await asyncio.to_thread(self.discovery.stop)
 
@@ -118,8 +122,12 @@ class FTMessageClient:
             await self.events_queue.put(f"⚠️ Erreur relais: {e}")
 
     async def _relay_loop(self) -> None:
+        if self.ws is None:
+            return
         try:
             async for raw in self.ws:
+                if self.ws is None:
+                    break
                 try:
                     frame = json.loads(raw)
                 except Exception:
@@ -146,8 +154,6 @@ class FTMessageClient:
                         except Exception:
                             decrypted = "[déchiffrement échoué]"
                     await self.incoming_queue.put((sender, decrypted, ts))
-                    if self._relay_current_channel:
-                        await self.store.add_channel_message(self._relay_current_channel, sender, decrypted, ts)
 
                 elif ftype == "PRIVATE_MESSAGE":
                     sender = frame.get("sender_login", "")
@@ -183,7 +189,11 @@ class FTMessageClient:
                     self.room_key = None
                     self._relay_current_channel = None
                     self._relay_members = []
-                    await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
+                    if self.ws:
+                        try:
+                            await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
+                        except Exception:
+                            pass
 
                 elif ftype == "JOIN_ACCEPTED":
                     self._relay_current_channel = frame.get("channel_name", "")
@@ -212,6 +222,7 @@ class FTMessageClient:
 
         except Exception as e:
             await self.events_queue.put(f"⚠️ Déconnecté du relais: {e}")
+        finally:
             self.ws = None
 
     def _resolve_local_ip(self) -> str:
@@ -241,10 +252,6 @@ class FTMessageClient:
                         decrypted = "[déchiffrement échoué]"
                 asyncio.run_coroutine_threadsafe(
                     self.incoming_queue.put((sender, decrypted, ts)),
-                    self._loop,
-                )
-                asyncio.run_coroutine_threadsafe(
-                    self.store.add_channel_message(channel_name, sender, decrypted, ts),
                     self._loop,
                 )
         return on_msg
@@ -377,10 +384,6 @@ class FTMessageClient:
             }))
             status, detail = await self._pending_join
             if status == "connected":
-                # Load history
-                history = await self.store.list_channel_messages(detail, limit=20)
-                for sender, payload, ts in history:
-                    await self.incoming_queue.put((sender, payload, ts))
                 await self.events_queue.put(f"Connecté au salon '{detail}' via le relais")
                 await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
             return status, detail
@@ -429,11 +432,6 @@ class FTMessageClient:
 
         channel_name = self.channel_client.channel_name
         self.channel_client.on_message = self._on_msg_cb(channel_name)
-
-        # Load history
-        history = await self.store.list_channel_messages(channel_name, limit=20)
-        for sender, payload, ts in history:
-            await self.incoming_queue.put((sender, payload, ts))
 
         await self.events_queue.put(
             f"Connecté au salon '{detail}' ({host_ip}:{host_port})",
@@ -504,7 +502,6 @@ class FTMessageClient:
                 "payload": payload,
             }))
             await self.incoming_queue.put((self.login, message, time.time()))
-            await self.store.add_channel_message(self._relay_current_channel, self.login, message, time.time())
             return "sent"
 
         if self.channel_server:

@@ -10,7 +10,7 @@ Solution : découverte par broadcast UDP, transport TCP.
 - **Serveur salon** (`channel.py`): TCP `ChannelServer` — auth password, broadcast messages, gestion membres.
 - **Client salon** (`channel.py`): TCP `ChannelClient` — connexion, envoi/réception frames.
 - **Client app** (`client.py`): `FTMessageClient` — orchestration create/join/leave, queues async.
-- **TUI** (`tui.py`): Textual — commandes `/create`, `/join`, `/list`, `/leave`, `/peers`, `/help`, `/quit`.
+- **TUI** (`tui.py`): Textual — commandes `/create`, `/join`, `/list`, `/leave`, `/peers`, `/settings`, `/help`, `/quit`. Écran paramètres (`SettingsScreen`) accessible via `/settings` ou `Ctrl+S` — affiche identité, réseau, salon actif, stockage, préférences (notifications desktop) et raccourcis.
 - **Crypto** (`crypto.py`, `security.py`): NaCl Curve25519 — chiffrement clés persistantes (TOFU).
 - **Store** (`store.py`, `trust.py`): SQLite via aiosqlite — identités et messages (héritage P2P).
 
