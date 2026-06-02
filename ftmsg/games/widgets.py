@@ -1,7 +1,7 @@
 from __future__ import annotations
 import math
 from textual.app import ComposeResult
-from textual.containers import Container, Grid, Horizontal, Vertical
+from textual.containers import Container, Grid, Horizontal, Vertical, Center
 from textual.reactive import reactive
 from textual.widgets import Button, Static, Label
 from typing import TYPE_CHECKING
@@ -12,8 +12,8 @@ class ConnectFourWidget(Container):
     state = reactive(dict)
     
     DEFAULT_CSS = """
-    ConnectFourWidget { width: auto; height: auto; content-align: center middle; padding: 1; }
-    #cf_grid { grid-size: 7 6; grid-gutter: 0; width: auto; height: auto; }
+    ConnectFourWidget { width: auto; height: auto; align: center middle; content-align: center middle; padding: 1; }
+    #cf_grid { grid-size: 7 6; grid-rows: 3; grid-columns: 5; grid-gutter: 0; width: 35; height: auto; }
     #cf_grid Button { width: 5; height: 3; min-width: 5; }
     """
     
@@ -23,10 +23,11 @@ class ConnectFourWidget(Container):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="cf_status", classes="game_status")
-        with Grid(id="cf_grid"):
-            for y in range(6):
-                for x in range(7):
-                    yield Button("", id=f"cf_cell_{x}_{y}")
+        with Center():
+            with Grid(id="cf_grid"):
+                for y in range(6):
+                    for x in range(7):
+                        yield Button("", id=f"cf_cell_{x}_{y}", variant="default")
 
     def watch_state(self, st: dict):
         board = st.get("board", [[None]*7 for _ in range(6)])
@@ -67,8 +68,8 @@ class ReversiWidget(Container):
     state = reactive(dict)
     
     DEFAULT_CSS = """
-    ReversiWidget { width: auto; height: auto; content-align: center middle; padding: 1; }
-    #rev_grid { grid-size: 8 8; grid-gutter: 0; width: auto; height: auto; }
+    ReversiWidget { width: auto; height: auto; align: center middle; content-align: center middle; padding: 1; }
+    #rev_grid { grid-size: 8 8; grid-rows: 3; grid-columns: 5; grid-gutter: 0; width: 40; height: auto; }
     #rev_grid Button { width: 5; height: 3; min-width: 5; background: green; color: white; border: solid darkgreen; }
     #rev_grid Button.valid { background: lightgreen; }
     """
@@ -80,10 +81,11 @@ class ReversiWidget(Container):
     def compose(self) -> ComposeResult:
         yield Static("", id="rev_status", classes="game_status")
         yield Button("Pass Turn", id="rev_pass", variant="warning")
-        with Grid(id="rev_grid"):
-            for y in range(8):
-                for x in range(8):
-                    yield Button("", id=f"rev_{x}_{y}")
+        with Center():
+            with Grid(id="rev_grid"):
+                for y in range(8):
+                    for x in range(8):
+                        yield Button("", id=f"rev_{x}_{y}")
 
     def watch_state(self, st: dict):
         board = st.get("board", [[None]*8 for _ in range(8)])
@@ -135,10 +137,10 @@ class HangmanWidget(Container):
     state = reactive(dict)
     
     DEFAULT_CSS = """
-    HangmanWidget { width: auto; height: auto; content-align: center middle; padding: 1; }
-    #hm_art { font-family: monospace; color: $primary; margin-bottom: 1; text-align: center; }
-    #hm_word { font-size: 20; text-style: bold; margin-bottom: 1; text-align: center; }
-    #hm_keyboard { grid-size: 7 4; grid-gutter: 1; width: auto; height: auto; }
+    HangmanWidget { width: 100%; height: auto; align: center middle; content-align: center middle; padding: 1; }
+    #hm_art { color: $primary; margin-bottom: 1; text-align: center; }
+    #hm_word { text-style: bold; margin-bottom: 1; text-align: center; }
+    #hm_keyboard { grid-size: 7 4; grid-rows: 3; grid-columns: 5; grid-gutter: 1; width: 41; height: auto; }
     #hm_keyboard Button { width: 5; height: 3; min-width: 5; }
     """
     
@@ -161,9 +163,10 @@ class HangmanWidget(Container):
         yield Static("", id="hm_art")
         yield Static("", id="hm_word")
         yield Static("Guessed: ", id="hm_guessed")
-        with Grid(id="hm_keyboard"):
-            for char in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                yield Button(char, id=f"hm_key_{char}")
+        with Center():
+            with Grid(id="hm_keyboard"):
+                for char in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                    yield Button(char, id=f"hm_key_{char}", variant="default")
         yield Button("Auto Pick Word", id="hm_auto_word")
 
     def watch_state(self, st: dict):
@@ -219,8 +222,8 @@ class MinesweeperWidget(Container):
     state = reactive(dict)
     
     DEFAULT_CSS = """
-    MinesweeperWidget { width: auto; height: auto; content-align: center middle; padding: 1; }
-    #ms_grid { grid-size: 10 10; grid-gutter: 0; width: auto; height: auto; }
+    MinesweeperWidget { width: auto; height: auto; align: center middle; content-align: center middle; padding: 1; }
+    #ms_grid { grid-size: 10 10; grid-rows: 3; grid-columns: 4; grid-gutter: 0; width: 40; height: auto; }
     #ms_grid Button { width: 4; height: 3; min-width: 4; }
     #ms_grid Button.revealed { background: $surface-darken-1; color: $text; border: none; }
     """
@@ -233,10 +236,11 @@ class MinesweeperWidget(Container):
     def compose(self) -> ComposeResult:
         yield Static("", id="ms_status")
         yield Button("Mode: ⛏️ Reveal", id="ms_toggle_mode", variant="primary")
-        with Grid(id="ms_grid"):
-            for y in range(10):
-                for x in range(10):
-                    yield Button("", id=f"ms_{x}_{y}")
+        with Center():
+            with Grid(id="ms_grid"):
+                for y in range(10):
+                    for x in range(10):
+                        yield Button("", id=f"ms_{x}_{y}")
 
     def watch_state(self, st: dict):
         board = st.get("display_board", [[None]*10 for _ in range(10)])
@@ -297,7 +301,7 @@ class BattleshipWidget(Container):
     BattleshipWidget { width: auto; height: auto; align: center middle; }
     .bs_boards { layout: horizontal; align: center middle; height: auto; width: auto; }
     .bs_board_container { margin: 1; align: center middle; height: auto; width: auto; }
-    .bs_grid { grid-size: 10 10; grid-gutter: 0; width: auto; height: auto; }
+    .bs_grid { grid-size: 10 10; grid-rows: 3; grid-columns: 4; grid-gutter: 0; width: 40; height: auto; }
     .bs_grid Button { width: 4; height: 3; min-width: 4; }
     """
     
@@ -306,25 +310,25 @@ class BattleshipWidget(Container):
         self.app_ref = app_ref
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="bs_status")
+        yield Static("Bataille Navale", id="bs_status", classes="game_status")
         with Horizontal(id="bs_setup_controls"):
             yield Button("Auto Place", id="bs_auto")
             yield Button("Ready", id="bs_ready", variant="success")
-            
-        with Horizontal(classes="bs_boards"):
-            with Vertical(classes="bs_board_container"):
-                yield Static("My Board")
-                with Grid(classes="bs_grid", id="bs_my_grid"):
-                    for y in range(10):
-                        for x in range(10):
-                            yield Button("", id=f"bso_{x}_{y}")
-                            
-            with Vertical(classes="bs_board_container"):
-                yield Static("Opponent's Board")
-                with Grid(classes="bs_grid", id="bs_op_grid"):
-                    for y in range(10):
-                        for x in range(10):
-                            yield Button("", id=f"bse_{x}_{y}")
+        with Center():
+            with Horizontal(classes="bs_boards"):
+                with Vertical(classes="bs_board_container"):
+                    yield Static("Votre flotte", classes="bs_label")
+                    with Grid(id="bs_grid_own", classes="bs_grid"):
+                        for y in range(10):
+                            for x in range(10):
+                                yield Button("", id=f"bso_{x}_{y}", variant="default", classes="bs_cell")
+                
+                with Vertical(classes="bs_board_container"):
+                    yield Static("Tirs ennemis", classes="bs_label")
+                    with Grid(id="bs_grid_attack", classes="bs_grid"):
+                        for y in range(10):
+                            for x in range(10):
+                                yield Button("", id=f"bse_{x}_{y}", variant="default", classes="bs_cell")
 
     def watch_state(self, st: dict):
         phase = st.get("phase", "setup")

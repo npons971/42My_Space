@@ -158,6 +158,7 @@ class SnakeWidget(Static):
     SnakeWidget {
         width: auto;
         height: auto;
+        align: center middle;
         content-align: center middle;
         color: $text;
         padding: 1 2;

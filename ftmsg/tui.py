@@ -6,12 +6,13 @@ import os
 import re
 import subprocess
 import time
+from typing import Any, Coroutine, Callable
 
 from textual.app import App, ComposeResult
-from textual.containers import Container, Grid, Horizontal, Vertical
+from textual.containers import Container, Grid, Horizontal, Vertical, VerticalScroll, ScrollableContainer, Center
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Header, Input, RichLog, Static, TextArea
+from textual.widgets import Button, Header, Input, RichLog, Static, TextArea, Label, ListItem, ListView
 from rich.text import Text as RichText
 
 from .client import FTMessageClient, default_login
@@ -526,6 +527,12 @@ class GameMenuScreen(ModalScreen):
         border: thick $primary;
         padding: 1 2;
     }
+    #game_list_container {
+        height: 1fr;
+        max-height: 20;
+        margin-bottom: 1;
+        overflow-y: auto;
+    }
     .game-menu-title {
         text-align: center;
         text-style: bold;
@@ -597,37 +604,38 @@ class GameMenuScreen(ModalScreen):
             solo = list_games(solo_only=True)
             mp = list_multiplayer_games()
 
-            if solo:
-                yield Static("━━━ 🕹️  Solo ━━━", classes="game-category")
-                for g in solo:
-                    with Horizontal(classes="game-card"):
-                        with Container(classes="game-card-info"):
-                            yield Static(f"{g.name}", classes="game-card-name")
-                            yield Static(f"{g.description}", classes="game-card-desc")
-                            yield Static(f"👤 1 joueur", classes="game-card-meta")
-                        yield Button("▶  Jouer", id=f"game_{g.game_id}", variant="primary", classes="game-card-btn")
+            with ScrollableContainer(id="game_list_container"):
+                if solo:
+                    yield Static("━━━ 🕹️  Solo ━━━", classes="game-category")
+                    for g in solo:
+                        with Horizontal(classes="game-card"):
+                            with Container(classes="game-card-info"):
+                                yield Static(f"{g.name}", classes="game-card-name")
+                                yield Static(f"{g.description}", classes="game-card-desc")
+                                yield Static(f"👤 1 joueur", classes="game-card-meta")
+                            yield Button("▶  Jouer", id=f"game_{g.game_id}", variant="primary", classes="game-card-btn")
 
-            if self.in_room and mp:
-                yield Static("━━━ 👥 Multijoueur ━━━", classes="game-category")
-                for g in mp:
-                    with Horizontal(classes="game-card"):
-                        with Container(classes="game-card-info"):
-                            yield Static(f"{g.name}", classes="game-card-name")
-                            yield Static(f"{g.description}", classes="game-card-desc")
-                            yield Static(f"👥 {g.min_players}-{g.max_players} joueurs", classes="game-card-meta")
-                        yield Button("▶  Lancer", id=f"game_{g.game_id}", variant="success", classes="game-card-btn")
-            elif mp:
-                yield Static("━━━ 👥 Multijoueur ━━━", classes="game-category")
-                yield Static("  [dim]Rejoins un salon pour jouer en multijoueur[/dim]")
-                for g in mp:
-                    with Horizontal(classes="game-card"):
-                        with Container(classes="game-card-info"):
-                            yield Static(f"{g.name}", classes="game-card-name")
-                            yield Static(f"{g.description}", classes="game-card-desc")
-                            yield Static(f"👥 {g.min_players}-{g.max_players} joueurs", classes="game-card-meta")
-                        yield Button("🔒", id=f"game_{g.game_id}", variant="default", disabled=True, classes="game-card-btn")
+                if self.in_room and mp:
+                    yield Static("━━━ 👥 Multijoueur ━━━", classes="game-category")
+                    for g in mp:
+                        with Horizontal(classes="game-card"):
+                            with Container(classes="game-card-info"):
+                                yield Static(f"{g.name}", classes="game-card-name")
+                                yield Static(f"{g.description}", classes="game-card-desc")
+                                yield Static(f"👥 {g.min_players}-{g.max_players} joueurs", classes="game-card-meta")
+                            yield Button("▶  Lancer", id=f"game_{g.game_id}", variant="success", classes="game-card-btn")
+                elif mp:
+                    yield Static("━━━ 👥 Multijoueur ━━━", classes="game-category")
+                    yield Static("  [dim]Rejoins un salon pour jouer en multijoueur[/dim]")
+                    for g in mp:
+                        with Horizontal(classes="game-card"):
+                            with Container(classes="game-card-info"):
+                                yield Static(f"{g.name}", classes="game-card-name")
+                                yield Static(f"{g.description}", classes="game-card-desc")
+                                yield Static(f"👥 {g.min_players}-{g.max_players} joueurs", classes="game-card-meta")
+                            yield Button("🔒", id=f"game_{g.game_id}", variant="default", disabled=True, classes="game-card-btn")
 
-            yield Button("✕  Fermer", id="game_menu_close", variant="default")
+            yield Button("✕  Fermer / Quitter", id="game_menu_close", variant="error")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "game_menu_close":
@@ -710,20 +718,23 @@ class ChessWidget(Container):
 
     DEFAULT_CSS = """
     ChessWidget {
-        width: auto;
+        width: 100%;
         height: auto;
+        align: center middle;
         content-align: center middle;
         padding: 1;
     }
-    #chess_info {
-        height: auto;
-        content-align: center middle;
+    #chess_status {
+        width: 100%;
+        text-align: center;
         margin-bottom: 1;
     }
     #chess_grid {
         grid-size: 8 8;
+        grid-rows: 3;
+        grid-columns: 5;
         grid-gutter: 0;
-        width: auto;
+        width: 40;
         height: auto;
         content-align: center middle;
     }
@@ -742,13 +753,13 @@ class ChessWidget(Container):
         self.selected_square: str | None = None
 
     def compose(self) -> ComposeResult:
-        with Container(id="chess_info"):
-            yield Static("", id="chess_status")
-        with Grid(id="chess_grid"):
-            for rank in range(8, 0, -1):
-                for file_idx, f in enumerate("abcdefgh"):
-                    sq = f"{f}{rank}"
-                    yield Button("", id=f"chess_cell_{sq}", variant="default")
+        yield Static("", id="chess_status")
+        with Center():
+            with Grid(id="chess_grid"):
+                for rank in range(8, 0, -1):
+                    for file_idx, f in enumerate("abcdefgh"):
+                        sq = f"{f}{rank}"
+                        yield Button("", id=f"chess_cell_{sq}", variant="default")
 
     def watch_state(self, new_state: dict) -> None:
         self._update_ui(new_state)
@@ -832,20 +843,23 @@ class TicTacToeWidget(Container):
 
     DEFAULT_CSS = """
     TicTacToeWidget {
-        width: auto;
+        width: 100%;
         height: auto;
+        align: center middle;
         content-align: center middle;
         padding: 1;
     }
-    #ttt_info {
-        height: auto;
-        content-align: center middle;
+    #ttt_status {
+        width: 100%;
+        text-align: center;
         margin-bottom: 1;
     }
     #ttt_grid {
         grid-size: 3 3;
+        grid-rows: 5;
+        grid-columns: 9;
         grid-gutter: 1;
-        width: auto;
+        width: 29;
         height: auto;
         content-align: center middle;
     }
@@ -872,11 +886,11 @@ class TicTacToeWidget(Container):
         self.app_ref = app_ref
 
     def compose(self) -> ComposeResult:
-        with Container(id="ttt_info"):
-            yield Static("", id="ttt_status")
-        with Grid(id="ttt_grid"):
-            for i in range(9):
-                yield Button("", id=f"ttt_cell_{i}", variant="default")
+        yield Static("", id="ttt_status")
+        with Center():
+            with Grid(id="ttt_grid"):
+                for i in range(9):
+                    yield Button("", id=f"ttt_cell_{i}", variant="default")
 
     def watch_state(self, new_state: dict) -> None:
         self._update_ui(new_state)
@@ -958,8 +972,9 @@ class WordRaceWidget(Container):
 
     DEFAULT_CSS = """
     WordRaceWidget {
-        width: auto;
+        width: 100%;
         height: auto;
+        align: center middle;
         content-align: center middle;
         padding: 1;
     }
@@ -1121,7 +1136,8 @@ class GameScreen(ModalScreen):
     }
     #game_area {
         width: 100%;
-        height: 1fr;
+        height: auto;
+        align: center middle;
         content-align: center middle;
         margin: 1 0;
         border: solid $surface-darken-2;
