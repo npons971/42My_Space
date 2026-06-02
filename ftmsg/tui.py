@@ -267,7 +267,7 @@ class CustomFooter(Horizontal):
         app = self.app
         assert isinstance(app, FtMsgApp)
         if event.button.id == "footer_quit":
-            app.action_quit()
+            app.exit()
         elif event.button.id == "footer_sidebar":
             app.action_toggle_sidebar()
         elif event.button.id == "footer_settings":
