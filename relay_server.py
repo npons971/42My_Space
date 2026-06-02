@@ -358,6 +358,29 @@ async def _handle_typing(client: ClientState, frame: dict) -> None:
     await _broadcast(ch, {"type": "TYPING", "login": client.login}, exclude=client.login)
 
 
+async def _handle_public_key(client: ClientState, frame: dict) -> None:
+    if not client.channel_name:
+        return
+    ch = _channels.get(client.channel_name)
+    if not ch:
+        return
+    await _broadcast(ch, frame, exclude=client.login)
+
+
+async def _handle_room_key(client: ClientState, frame: dict) -> None:
+    if not client.channel_name:
+        return
+    ch = _channels.get(client.channel_name)
+    if not ch:
+        return
+    target_login = str(frame.get("target_login", ""))
+    target = ch.members.get(target_login)
+    if target:
+        await _send(target.ws, frame)
+    else:
+        await _send(client.ws, {"type": "ERROR", "reason": f"{target_login} not in channel"})
+
+
 async def _handle_game_frame(client: ClientState, frame: dict) -> None:
     if not client.channel_name:
         return
@@ -385,6 +408,8 @@ _HANDLERS = {
     "GAME_END": _handle_game_frame,
     "SCORE_REQ": _handle_game_frame,
     "SCORE_RESP": _handle_game_frame,
+    "PUBLIC_KEY": _handle_public_key,
+    "ROOM_KEY": _handle_room_key,
 }
 
 
