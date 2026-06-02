@@ -7,7 +7,30 @@ from .client import FTMessageClient
 from .tui import run_tui
 
 
+def _check_update() -> None:
+    """Tente de mettre à jour le code via git pull avant de lancer l'application."""
+    import os
+    import subprocess
+    
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    git_dir = os.path.join(project_dir, ".git")
+    
+    if os.path.exists(git_dir):
+        try:
+            # On laisse 3 secondes maximum pour éviter de bloquer si pas de réseau
+            subprocess.run(
+                ["git", "pull", "--rebase", "--quiet"],
+                cwd=project_dir,
+                timeout=3,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception:
+            pass
+
 def main() -> None:
+    _check_update()
+
     parser = argparse.ArgumentParser(description="42msg terminal client")
     parser.add_argument("--debug", action="store_true", help="Active les logs de debug")
     parser.add_argument("--host", metavar="NAME", help="Créer un salon et quitter (mode headless)")
