@@ -44,7 +44,7 @@ mkdir -p ~/.local/bin
 cat > ~/.local/bin/42msg <<'EOF'
 #!/usr/bin/env bash
 cd "$HOME/.local/share/42msg" || exit 1
-exec "$HOME/.local/share/42msg/.venv/bin/python" -m ftmsg "$@"
+exec "$HOME/.local/share/42msg/.venv/bin/python" -m ftmsg --relay wss://four2my-space.onrender.com "$@"
 EOF
 chmod +x ~/.local/bin/42msg
 export PATH="$HOME/.local/bin:$PATH"
@@ -90,6 +90,13 @@ Aucun package n'est installé globalement sur le système.
 | `/msg <login> <text>` | Message privé |
 | `/kick <login>` | Expulser (hôte) |
 | `/ban <login>` | Bannir (hôte) |
+| `/games` | Afficher le menu des mini-jeux (Snake, TicTacToe, WordRace, Chess) |
+| `/game_start <game_id>` | Lancer un mini-jeu |
+| `/game_join <invite_id>` | Rejoindre une partie multijoueur via son ID |
+| `/game_leave` | Quitter la partie en cours |
+| `/profile [login]` | Voir le profil d'un joueur ou le sien |
+| `/score list` ou `<index>` | Lister ses scores ou partager un score dans le chat |
+| `/leaderboard <index>` | Afficher le classement global pour un jeu |
 | `/settings` | Paramètres (Ctrl+S) |
 | `/help` | Aide |
 | `/quit` | Quitter |
