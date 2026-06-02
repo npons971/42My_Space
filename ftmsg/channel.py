@@ -400,6 +400,7 @@ class ChannelClient:
         on_disconnect: Callable[[str], None] | None = None,
         on_room_key: Callable[[str], None] | None = None,
         on_typing: Callable[[str], None] | None = None,
+        on_game_frame: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.login = login
         self.on_message = on_message
@@ -408,6 +409,7 @@ class ChannelClient:
         self.on_disconnect = on_disconnect
         self.on_room_key = on_room_key
         self.on_typing = on_typing
+        self.on_game_frame = on_game_frame
 
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
@@ -546,6 +548,16 @@ class ChannelClient:
             self._connected = False
             return False
 
+    async def send_game_frame(self, frame: dict[str, Any]) -> bool:
+        if not self._connected or not self.writer:
+            return False
+        try:
+            await write_frame(self.writer, frame)
+            return True
+        except (OSError, ConnectionError):
+            self._connected = False
+            return False
+
     async def _read_loop(self) -> None:
         try:
             while self._connected and self.reader:
@@ -617,6 +629,10 @@ class ChannelClient:
                     sender = str(frame.get("login", ""))
                     if sender and self.on_typing:
                         self.on_typing(sender)
+
+                elif ftype.startswith("GAME_"):
+                    if self.on_game_frame:
+                        self.on_game_frame(frame)
 
                 else:
                     pass

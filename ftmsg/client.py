@@ -21,6 +21,7 @@ from .crypto import (
     generate_room_key,
 )
 from .discovery import BroadcastDiscovery, ChannelInfo, DiscoveredChannel
+from .games.base import GameInvite, BaseGameSession, get_game, list_games, list_multiplayer_games
 from .security import generate_or_load_signing_keypair
 from .store import MessageStore
 from .trust import TrustStore
@@ -68,6 +69,14 @@ class FTMessageClient:
         self.incoming_queue: asyncio.Queue[tuple[str, str, float]] = asyncio.Queue(maxsize=1000)
         self.events_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=500)
         self._loop: asyncio.AbstractEventLoop | None = None
+
+        # Game state
+        self.active_invites: dict[str, GameInvite] = {}
+        self.current_game_session: BaseGameSession | None = None
+        self.current_game_invite: GameInvite | None = None
+        self.on_game_state_change: Callable[[dict[str, Any]], None] | None = None
+        self.on_game_invite: Callable[[GameInvite], None] | None = None
+        self.on_game_end: Callable[[str | None], None] | None = None
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -206,6 +215,12 @@ class FTMessageClient:
                     sender = str(frame.get("login", ""))
                     if sender:
                         self._on_typing(sender)
+                elif ftype.startswith("GAME_"):
+                    if self._loop:
+                        asyncio.run_coroutine_threadsafe(
+                            self._handle_game_frame(frame),
+                            self._loop,
+                        )
                 elif ftype in ("CHANNEL_CLOSED", "LEFT", "KICKED"):
                     if ftype == "CHANNEL_CLOSED":
                         await self.events_queue.put(f"Salon fermé: {frame.get('reason', '')}")
@@ -666,6 +681,203 @@ class FTMessageClient:
                 ),
                 self._loop,
             )
+
+
+    # ------------------------------------------------------------------ #
+    # Games
+    # ------------------------------------------------------------------ #
+
+    async def _handle_game_frame(self, frame: dict[str, Any]) -> None:
+        ftype = frame.get("type")
+        if ftype == "GAME_INVITE":
+            invite = GameInvite.from_dict(frame)
+            self.active_invites[invite.invite_id] = invite
+            if self.on_game_invite:
+                self.on_game_invite(invite)
+            await self.events_queue.put(
+                f"🎮 {invite.host_login} propose {invite.game_name} — tape /game_join {invite.invite_id}"
+            )
+        elif ftype == "GAME_JOIN":
+            invite_id = frame.get("invite_id", "")
+            login = frame.get("login", "")
+            invite = self.active_invites.get(invite_id)
+            if invite and login and login not in invite.players:
+                invite.players.append(login)
+            if self.current_game_invite and self.current_game_invite.invite_id == invite_id:
+                self.current_game_invite.players = invite.players if invite else self.current_game_invite.players
+            await self.events_queue.put(f"🎮 {login} a rejoint la partie {invite_id}")
+        elif ftype == "GAME_LEAVE":
+            invite_id = frame.get("invite_id", "")
+            login = frame.get("login", "")
+            invite = self.active_invites.get(invite_id)
+            if invite and login in invite.players:
+                invite.players.remove(login)
+            await self.events_queue.put(f"🎮 {login} a quitté la partie {invite_id}")
+        elif ftype == "GAME_STATE":
+            if self.on_game_state_change:
+                self.on_game_state_change(frame.get("state", {}))
+        elif ftype == "GAME_ACTION":
+            if self.current_game_session:
+                player = frame.get("login", "")
+                action = frame.get("action", "")
+                data = frame.get("data", {})
+                self.current_game_session.handle_action(player, action, data)
+                # Host broadcasts updated state
+                if self.is_hosting:
+                    await self.broadcast_game_state()
+        elif ftype == "GAME_END":
+            winner = frame.get("winner")
+            if self.on_game_end:
+                self.on_game_end(winner)
+            await self.events_queue.put(
+                f"🎮 Partie terminée — gagnant: {winner or 'aucun (égalité)' }"
+            )
+            self.current_game_session = None
+            self.current_game_invite = None
+
+    async def create_game_invite(self, game_id: str) -> tuple[str, GameInvite | None]:
+        game = get_game(game_id)
+        if not game:
+            return "unknown_game", None
+        if game.is_solo:
+            invite = GameInvite(
+                invite_id=f"solo-{self.login}-{int(time.time())}",
+                game_id=game_id,
+                game_name=game.name,
+                host_login=self.login,
+                max_players=game.max_players,
+                players=[self.login],
+            )
+            self.active_invites[invite.invite_id] = invite
+            self.current_game_invite = invite
+            session = game.create_session(invite, on_state_change=self._on_local_game_state_change)
+            self.current_game_session = session
+            return "solo_started", invite
+
+        # Multiplayer — must be in a channel
+        if not self.current_channel_name():
+            return "not_in_channel", None
+
+        invite = GameInvite(
+            invite_id=f"mp-{self.login}-{int(time.time())}",
+            game_id=game_id,
+            game_name=game.name,
+            host_login=self.login,
+            max_players=game.max_players,
+            players=[self.login],
+        )
+        self.active_invites[invite.invite_id] = invite
+        self.current_game_invite = invite
+
+        frame = {"type": "GAME_INVITE", **invite.to_dict()}
+        await self._send_game_frame(frame)
+        return "created", invite
+
+    async def join_game_invite(self, invite_id: str) -> str:
+        invite = self.active_invites.get(invite_id)
+        if not invite:
+            return "unknown_invite"
+        if self.login in invite.players:
+            return "already_joined"
+        if len(invite.players) >= invite.max_players:
+            return "full"
+        invite.players.append(self.login)
+        self.current_game_invite = invite
+
+        frame = {"type": "GAME_JOIN", "invite_id": invite_id, "login": self.login}
+        await self._send_game_frame(frame)
+
+        game = get_game(invite.game_id)
+        if game and not game.is_solo:
+            session = game.create_session(invite, on_state_change=self._on_local_game_state_change)
+            self.current_game_session = session
+
+        # If we are the host and have enough players, start the game
+        if self.is_hosting and invite.host_login == self.login and len(invite.players) >= game.min_players:
+            await self._start_game_session()
+        return "joined"
+
+    async def leave_game(self) -> None:
+        if self.current_game_invite:
+            invite_id = self.current_game_invite.invite_id
+            frame = {"type": "GAME_LEAVE", "invite_id": invite_id, "login": self.login}
+            await self._send_game_frame(frame)
+        self.current_game_session = None
+        self.current_game_invite = None
+
+    async def send_game_action(self, action: str, data: dict[str, Any]) -> None:
+        if not self.current_game_invite:
+            return
+        frame = {
+            "type": "GAME_ACTION",
+            "invite_id": self.current_game_invite.invite_id,
+            "login": self.login,
+            "action": action,
+            "data": data,
+        }
+        await self._send_game_frame(frame)
+        # Solo: directly handle locally
+        if self.current_game_session:
+            self.current_game_session.handle_action(self.login, action, data)
+            if self.on_game_state_change:
+                self.on_game_state_change(self.current_game_session.get_render_state())
+
+    async def broadcast_game_state(self) -> None:
+        if not self.current_game_session or not self.current_game_invite:
+            return
+        frame = {
+            "type": "GAME_STATE",
+            "invite_id": self.current_game_invite.invite_id,
+            "state": self.current_game_session.get_render_state(),
+        }
+        await self._send_game_frame(frame)
+
+    async def end_current_game(self, winner: str | None = None) -> None:
+        if not self.current_game_invite:
+            return
+        frame = {
+            "type": "GAME_END",
+            "invite_id": self.current_game_invite.invite_id,
+            "winner": winner,
+        }
+        await self._send_game_frame(frame)
+        self.current_game_session = None
+        self.current_game_invite = None
+
+    async def _start_game_session(self) -> None:
+        if not self.current_game_invite or not self.is_hosting:
+            return
+        game = get_game(self.current_game_invite.game_id)
+        if not game:
+            return
+        session = game.create_session(self.current_game_invite, on_state_change=self._on_host_game_state_change)
+        self.current_game_session = session
+        await self.broadcast_game_state()
+
+    def _on_local_game_state_change(self, state: dict[str, Any]) -> None:
+        if self.on_game_state_change:
+            self.on_game_state_change(state)
+
+    def _on_host_game_state_change(self, state: dict[str, Any]) -> None:
+        if self.on_game_state_change:
+            self.on_game_state_change(state)
+        # Auto-broadcast from host
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(
+                self.broadcast_game_state(),
+                self._loop,
+            )
+
+    async def _send_game_frame(self, frame: dict[str, Any]) -> None:
+        if self.ws and self._relay_current_channel:
+            try:
+                await self.ws.send(json.dumps(frame))
+            except Exception:
+                pass
+        elif self.channel_server:
+            await self.channel_server.broadcast(frame)
+        elif self.channel_client and self.channel_client._connected:
+            await self.channel_client.send_game_frame(frame)
 
 
 def default_login() -> str:
