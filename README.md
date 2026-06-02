@@ -6,7 +6,7 @@ sur TCP. Pas de serveur central — chaque salon est hébergé par son créateur
 ## Installation en une ligne (curl)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/npons972/42My_Space/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/npons971/42My_Space/master/install.sh | bash
 ```
 
 Puis relance ton shell ou source ton rc :
@@ -32,7 +32,7 @@ Avec un pseudo spécifique :
 ## Installation manuelle (git + make)
 
 ```bash
-git clone https://github.com/npons972/42My_Space.git
+git clone https://github.com/npons971/42My_Space.git
 cd 42My_Space
 make install   # crée le venv, installe les deps localement, configure l'alias
 source ~/.zshrc

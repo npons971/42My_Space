@@ -358,6 +358,15 @@ async def _handle_typing(client: ClientState, frame: dict) -> None:
     await _broadcast(ch, {"type": "TYPING", "login": client.login}, exclude=client.login)
 
 
+async def _handle_game_frame(client: ClientState, frame: dict) -> None:
+    if not client.channel_name:
+        return
+    ch = _channels.get(client.channel_name)
+    if not ch:
+        return
+    await _broadcast(ch, frame, exclude=client.login)
+
+
 _HANDLERS = {
     "LIST_CHANNELS": _handle_list,
     "CREATE_CHANNEL": _handle_create,
@@ -368,6 +377,12 @@ _HANDLERS = {
     "KICK": _handle_kick,
     "BAN": _handle_ban,
     "TYPING": _handle_typing,
+    "GAME_INVITE": _handle_game_frame,
+    "GAME_JOIN": _handle_game_frame,
+    "GAME_LEAVE": _handle_game_frame,
+    "GAME_STATE": _handle_game_frame,
+    "GAME_ACTION": _handle_game_frame,
+    "GAME_END": _handle_game_frame,
 }
 
 

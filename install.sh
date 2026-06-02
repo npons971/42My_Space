@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/npons972/42My_Space.git"
+REPO_URL="https://github.com/npons971/42My_Space.git"
 INSTALL_DIR="${HOME}/.local/share/42msg"
 VENV_DIR="${INSTALL_DIR}/.venv"
 PYTHON="${VENV_DIR}/bin/python"
