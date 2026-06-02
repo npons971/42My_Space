@@ -8,16 +8,22 @@ import subprocess
 import time
 
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Grid, Horizontal
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Header, Input, RichLog, Static
+from textual.widgets import Button, Header, Input, RichLog, Static, TextArea
+from rich.text import Text as RichText
 
 from .client import FTMessageClient, default_login
+from .games.base import GameInvite, list_games, list_multiplayer_games, get_game
+from .games.snake import SnakeWidget, SnakeGame
+from .games.tictactoe import TicTacToeGame
+from .games.wordrace import WordRaceGame
 
 _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
     "/msg ", "/kick ", "/ban ", "/settings", "/help", "/quit",
+    "/games", "/game_start ", "/game_join ", "/game_leave",
 ]
 
 _USER_COLORS = [
@@ -222,6 +228,7 @@ class SettingsScreen(ModalScreen):
             f"  [bold]Ctrl+Q[/bold] Quitter\n"
             f"  [bold]Ctrl+B[/bold] Sidebar\n"
             f"  [bold]Ctrl+S[/bold] Paramètres\n"
+            f"  [bold]Ctrl+E[/bold] Copier historique\n"
             f"  [bold]Tab[/bold]    Autocomplétion\n"
         )
         self.query_one("#settings_shortcuts", Static).update(shortcuts)
@@ -274,13 +281,715 @@ class CustomFooter(Horizontal):
             app.action_toggle_settings()
 
 
+class ChatLog(RichLog):
+    """RichLog qui garde une copie texte brut de tout ce qui est affiche."""
+
+    def __init__(self, app_ref: FtMsgApp, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+
+    def write(self, *args, **kwargs) -> None:
+        result = super().write(*args, **kwargs)
+        if args:
+            content = args[0]
+            try:
+                if isinstance(content, str):
+                    plain = RichText.from_markup(content).plain
+                elif isinstance(content, RichText):
+                    plain = content.plain
+                else:
+                    plain = str(content)
+                self.app_ref._chat_history.append(plain)
+                if len(self.app_ref._chat_history) > 1000:
+                    self.app_ref._chat_history = self.app_ref._chat_history[-500:]
+            except Exception:
+                pass
+        return result
+
+
+class CopyScreen(ModalScreen):
+    """Ecran modal pour visualiser et copier l'historique du chat."""
+
+    BINDINGS = [
+        ("escape", "close", "Fermer"),
+        ("ctrl+e", "close", "Fermer"),
+    ]
+
+    DEFAULT_CSS = """
+    CopyScreen {
+        align: center middle;
+    }
+    #copy_container {
+        width: 80;
+        height: 90%;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    .copy-title {
+        text-align: center;
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 1;
+    }
+    #copy_area {
+        width: 100%;
+        height: 1fr;
+        border: solid $surface-darken-2;
+    }
+    #copy_buttons {
+        height: auto;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, app_ref: FtMsgApp, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+
+    def compose(self) -> ComposeResult:
+        with Container(id="copy_container"):
+            yield Static("Historique", classes="copy-title")
+            history = "\n".join(self.app_ref._chat_history[-500:])
+            yield TextArea(history, read_only=True, id="copy_area")
+            with Horizontal(id="copy_buttons"):
+                yield Button("Copier selection", id="copy_selection", variant="success")
+                yield Button("Copier tout", id="copy_all", variant="primary")
+                yield Button("Fermer", id="copy_close", variant="default")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        ta = self.query_one("#copy_area", TextArea)
+        if event.button.id == "copy_selection":
+            text = ""
+            if hasattr(ta, "selected_text"):
+                text = ta.selected_text or ""
+            if not text:
+                self.app_ref.notify("Aucun texte selectionne", severity="warning")
+                return
+            if self.app_ref._copy_to_clipboard(text):
+                self.app_ref.notify("Texte copie dans le presse-papier", title="Copie", severity="information")
+            else:
+                self.app_ref.notify("Impossible de copier (presse-papier non accessible)", severity="error")
+        elif event.button.id == "copy_all":
+            if self.app_ref._copy_to_clipboard(ta.text):
+                self.app_ref.notify("Historique copie dans le presse-papier", title="Copie", severity="information")
+            else:
+                self.app_ref.notify("Impossible de copier (presse-papier non accessible)", severity="error")
+        elif event.button.id == "copy_close":
+            self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+# --------------------------------------------------------------------------- #
+# Game Menu Screen
+# --------------------------------------------------------------------------- #
+class GameMenuScreen(ModalScreen):
+    BINDINGS = [
+        ("ctrl+g", "close", "Fermer"),
+    ]
+
+    DEFAULT_CSS = """
+    GameMenuScreen {
+        align: center middle;
+    }
+    #game_menu_container {
+        width: 72;
+        height: auto;
+        max-height: 90%;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+    .game-menu-title {
+        text-align: center;
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 0;
+    }
+    .game-menu-subtitle {
+        text-align: center;
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+    .game-category {
+        text-align: left;
+        text-style: bold;
+        color: $secondary;
+        margin: 1 0 0 0;
+        padding: 0 1;
+    }
+    .game-card {
+        layout: horizontal;
+        height: auto;
+        margin: 0 1;
+        padding: 0;
+        border: solid $surface-darken-2;
+        background: $surface-darken-1;
+    }
+    .game-card:hover {
+        border: solid $primary-darken-1;
+    }
+    .game-card-info {
+        width: 1fr;
+        height: auto;
+        padding: 0 1;
+        content-align: left middle;
+    }
+    .game-card-name {
+        text-style: bold;
+        color: $text;
+    }
+    .game-card-desc {
+        color: $text-muted;
+    }
+    .game-card-meta {
+        color: $text-muted;
+        text-style: italic;
+    }
+    .game-card-btn {
+        width: auto;
+        min-width: 12;
+        height: 3;
+        content-align: center middle;
+        margin: 0 1;
+    }
+    #game_menu_close {
+        width: 100%;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, in_room: bool = False) -> None:
+        super().__init__()
+        self.in_room = in_room
+
+    def compose(self) -> ComposeResult:
+        with Container(id="game_menu_container"):
+            yield Static("🎮  C E N T R E   D E   J E U X", classes="game-menu-title")
+            yield Static("Choisis un jeu à lancer", classes="game-menu-subtitle")
+
+            solo = list_games(solo_only=True)
+            mp = list_multiplayer_games()
+
+            if solo:
+                yield Static("━━━ 🕹️  Solo ━━━", classes="game-category")
+                for g in solo:
+                    with Horizontal(classes="game-card"):
+                        with Container(classes="game-card-info"):
+                            yield Static(f"{g.name}", classes="game-card-name")
+                            yield Static(f"{g.description}", classes="game-card-desc")
+                            yield Static(f"👤 1 joueur", classes="game-card-meta")
+                        yield Button("▶  Jouer", id=f"game_{g.game_id}", variant="primary", classes="game-card-btn")
+
+            if self.in_room and mp:
+                yield Static("━━━ 👥 Multijoueur ━━━", classes="game-category")
+                for g in mp:
+                    with Horizontal(classes="game-card"):
+                        with Container(classes="game-card-info"):
+                            yield Static(f"{g.name}", classes="game-card-name")
+                            yield Static(f"{g.description}", classes="game-card-desc")
+                            yield Static(f"👥 {g.min_players}-{g.max_players} joueurs", classes="game-card-meta")
+                        yield Button("▶  Lancer", id=f"game_{g.game_id}", variant="success", classes="game-card-btn")
+            elif mp:
+                yield Static("━━━ 👥 Multijoueur ━━━", classes="game-category")
+                yield Static("  [dim]Rejoins un salon pour jouer en multijoueur[/dim]")
+                for g in mp:
+                    with Horizontal(classes="game-card"):
+                        with Container(classes="game-card-info"):
+                            yield Static(f"{g.name}", classes="game-card-name")
+                            yield Static(f"{g.description}", classes="game-card-desc")
+                            yield Static(f"👥 {g.min_players}-{g.max_players} joueurs", classes="game-card-meta")
+                        yield Button("🔒", id=f"game_{g.game_id}", variant="default", disabled=True, classes="game-card-btn")
+
+            yield Button("✕  Fermer", id="game_menu_close", variant="default")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "game_menu_close":
+            self.dismiss()
+            return
+        if event.button.id and event.button.id.startswith("game_"):
+            game_id = event.button.id[len("game_"):]
+            self.dismiss(game_id)
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+# --------------------------------------------------------------------------- #
+# Game Invite Banner
+# --------------------------------------------------------------------------- #
+class GameInviteBanner(Horizontal):
+    """Banner shown when a multiplayer game invite is active."""
+
+    DEFAULT_CSS = """
+    GameInviteBanner {
+        height: auto;
+        padding: 0 1;
+        background: $primary-darken-2;
+        color: $text;
+        border-top: solid $primary;
+        border-bottom: solid $primary-darken-2;
+    }
+    GameInviteBanner Static {
+        content-align: center middle;
+        height: auto;
+    }
+    GameInviteBanner Button {
+        margin: 0 1;
+    }
+    #invite_text {
+        width: 1fr;
+        content-align: left middle;
+        padding: 0 1;
+    }
+    #invite_join {
+        background: $success-darken-1;
+        border: solid $success;
+    }
+    #invite_join:hover {
+        background: $success;
+    }
+    """
+
+    def __init__(self, app_ref: "FtMsgApp", invite: GameInvite, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+        self.invite = invite
+
+    def compose(self) -> ComposeResult:
+        count = len(self.invite.players)
+        yield Static(
+            f"🎮  [bold]{self.invite.host_login}[/bold] lance [bold green]{self.invite.game_name}[/bold green]  —  "
+            f"{count}/{self.invite.max_players} joueur·euses",
+            id="invite_text",
+        )
+        yield Button("🚀 Rejoindre", id="invite_join", variant="success")
+        yield Button("✕ Ignorer", id="invite_dismiss", variant="default")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "invite_join":
+            self.app_ref.run_worker(self.app_ref._do_join_game(self.invite.invite_id))
+            self.remove()
+        elif event.button.id == "invite_dismiss":
+            self.remove()
+
+
+# --------------------------------------------------------------------------- #
+# Game Widgets
+# --------------------------------------------------------------------------- #
+class TicTacToeWidget(Container):
+    """Interactive Tic-Tac-Toe grid with clickable buttons."""
+
+    state = reactive(dict)
+
+    DEFAULT_CSS = """
+    TicTacToeWidget {
+        width: auto;
+        height: auto;
+        content-align: center middle;
+        padding: 1;
+    }
+    #ttt_info {
+        height: auto;
+        content-align: center middle;
+        margin-bottom: 1;
+    }
+    #ttt_grid {
+        grid-size: 3 3;
+        grid-gutter: 1;
+        width: auto;
+        height: auto;
+        content-align: center middle;
+    }
+    #ttt_grid Button {
+        width: 9;
+        height: 5;
+        content-align: center middle;
+        text-style: bold;
+    }
+    #ttt_grid Button.x_cell {
+        background: $primary-darken-1;
+        color: $text;
+        border: solid $primary;
+    }
+    #ttt_grid Button.o_cell {
+        background: $error-darken-1;
+        color: $text;
+        border: solid $error;
+    }
+    """
+
+    def __init__(self, app_ref: "FtMsgApp", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+
+    def compose(self) -> ComposeResult:
+        with Container(id="ttt_info"):
+            yield Static("", id="ttt_status")
+        with Grid(id="ttt_grid"):
+            for i in range(9):
+                yield Button("", id=f"ttt_cell_{i}", variant="default")
+
+    def watch_state(self, new_state: dict) -> None:
+        self._update_ui(new_state)
+
+    def _update_ui(self, st: dict) -> None:
+        board = st.get("board", [[None]*3 for _ in range(3)])
+        current = st.get("current_player", "")
+        winner = st.get("winner")
+        active = st.get("active", True)
+        players = st.get("players", [])
+        symbols = st.get("symbols", ["X", "O"])
+
+        my_symbol = ""
+        if self.app_ref.login in players:
+            my_idx = players.index(self.app_ref.login)
+            my_symbol = symbols[my_idx % len(symbols)]
+
+        status = self.query_one("#ttt_status", Static)
+        lines: list[str] = []
+        lines.append("[bold]⭕ T i c - T a c - T o e[/bold]")
+        lines.append("")
+
+        if winner:
+            if winner == self.app_ref.login:
+                lines.append(f"[bold green]🎉  Tu as gagné !  🎉[/bold green]")
+            else:
+                lines.append(f"[bold red]😞  {winner} a gagné  😞[/bold red]")
+        elif not active:
+            lines.append("[dim]🤝  Match nul  🤝[/dim]")
+        else:
+            my_turn = current == self.app_ref.login
+            if my_turn:
+                lines.append(f"[bold green]👉  C'est ton tour ({my_symbol})[/bold green]")
+            else:
+                lines.append(f"[dim]Tour de {current}...[/dim]")
+            if my_symbol:
+                lines.append(f"[dim]Tu joues {my_symbol}[/dim]")
+        status.update("\n".join(lines))
+
+        for y in range(3):
+            for x in range(3):
+                cell = board[y][x]
+                btn = self.query_one(f"#ttt_cell_{y*3+x}", Button)
+
+                if cell == "X":
+                    btn.label = "[bold]X[/bold]"
+                    btn.variant = "primary"
+                    btn.add_class("x_cell")
+                    btn.remove_class("o_cell")
+                    btn.disabled = True
+                elif cell == "O":
+                    btn.label = "[bold]O[/bold]"
+                    btn.variant = "error"
+                    btn.add_class("o_cell")
+                    btn.remove_class("x_cell")
+                    btn.disabled = True
+                else:
+                    btn.label = ""
+                    btn.variant = "default"
+                    btn.remove_class("x_cell")
+                    btn.remove_class("o_cell")
+                    my_turn = current == self.app_ref.login
+                    btn.disabled = not active or not my_turn or winner is not None
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id and event.button.id.startswith("ttt_cell_"):
+            idx = int(event.button.id.split("_")[-1])
+            x = idx % 3
+            y = idx // 3
+            self.app_ref.run_worker(
+                self.app_ref.client.send_game_action("move", {"x": x, "y": y})
+            )
+
+
+class WordRaceWidget(Container):
+    """Visually rich Word Race display with score bars and round progress."""
+
+    state = reactive(dict)
+
+    DEFAULT_CSS = """
+    WordRaceWidget {
+        width: auto;
+        height: auto;
+        content-align: center middle;
+        padding: 1;
+    }
+    #wr_title {
+        text-align: center;
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 0;
+    }
+    #wr_word {
+        text-align: center;
+        text-style: bold;
+        color: $error;
+        height: auto;
+        margin: 1 0;
+    }
+    #wr_round {
+        text-align: center;
+        color: $text-muted;
+        margin-bottom: 0;
+    }
+    #wr_scores {
+        width: auto;
+        height: auto;
+        content-align: center middle;
+        margin: 1 0;
+    }
+    #wr_status {
+        text-align: center;
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, app_ref: "FtMsgApp", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+
+    def compose(self) -> ComposeResult:
+        yield Static("[bold]🏁  W O R D   R A C E[/bold]", id="wr_title")
+        yield Static("", id="wr_round")
+        yield Static("", id="wr_word")
+        yield Static("", id="wr_scores")
+        yield Static("", id="wr_status")
+
+    def watch_state(self, new_state: dict) -> None:
+        self._update_ui(new_state)
+
+    def _update_ui(self, st: dict) -> None:
+        word = st.get("current_word", "")
+        scores = st.get("scores", {})
+        rnd = st.get("round", 0)
+        total = st.get("total_rounds", 5)
+        winner = st.get("winner")
+        active = st.get("active", True)
+        round_winner = st.get("round_winner")
+
+        round_dots = []
+        for i in range(1, total + 1):
+            if i < rnd:
+                round_dots.append("[green]●[/green]")
+            elif i == rnd:
+                round_dots.append("[bold red]●[/bold red]")
+            else:
+                round_dots.append("[dim]○[/dim]")
+
+        round_widget = self.query_one("#wr_round", Static)
+        round_widget.update(f"Round {rnd}/{total}     " + "  ".join(round_dots))
+
+        word_widget = self.query_one("#wr_word", Static)
+        if word:
+            word_widget.update(f"[bold red blink]  {word.upper()}  [/bold red blink]")
+        else:
+            word_widget.update("")
+
+        scores_widget = self.query_one("#wr_scores", Static)
+        score_lines: list[str] = []
+        if scores:
+            max_score = max(scores.values()) if scores else 0
+            max_score = max(max_score, 1)
+            for player, score in sorted(scores.items(), key=lambda x: -x[1]):
+                bar_len = int((score / max_score) * 18)
+                bar = "█" * bar_len + "░" * (18 - bar_len)
+                color = "green" if player == self.app_ref.login else "cyan"
+                marker = "👉" if player == self.app_ref.login else "  "
+                score_lines.append(f"{marker} [bold {color}]{player:12}[/bold {color}] {bar} {score}")
+        scores_widget.update("\n".join(score_lines) if score_lines else "")
+
+        status_widget = self.query_one("#wr_status", Static)
+        if winner:
+            if winner == self.app_ref.login:
+                status_widget.update("[bold green]🎉  Tu as gagné la partie !  🎉[/bold green]")
+            else:
+                status_widget.update(f"[bold red]😞  {winner} a gagné la partie  😞[/bold red]")
+        elif not active:
+            status_widget.update("[dim]Partie terminée[/dim]")
+        elif round_winner:
+            status_widget.update(f"[yellow]⭐  {round_winner} remporte ce round !  ⭐[/yellow]")
+        else:
+            status_widget.update("[dim]Tape le mot vite avec /game_action type <mot>[/dim]")
+
+
+# --------------------------------------------------------------------------- #
+# Game Screen
+# --------------------------------------------------------------------------- #
+class GameScreen(ModalScreen):
+    """Overlay screen for active gameplay with themed styling."""
+
+    BINDINGS = [
+        ("escape", "close", "Quitter"),
+        ("q", "close", "Quitter"),
+        ("up", "snake_up", "Haut"),
+        ("down", "snake_down", "Bas"),
+        ("left", "snake_left", "Gauche"),
+        ("right", "snake_right", "Droite"),
+        ("r", "snake_restart", "Restart"),
+    ]
+
+    DEFAULT_CSS = """
+    GameScreen {
+        align: center middle;
+    }
+    #game_container {
+        width: 60;
+        height: auto;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+    #game_header {
+        layout: horizontal;
+        height: auto;
+        margin-bottom: 1;
+        border-bottom: solid $surface-darken-2;
+        padding-bottom: 1;
+    }
+    #game_title {
+        width: 1fr;
+        text-align: left;
+        text-style: bold;
+        color: $primary;
+        content-align: left middle;
+    }
+    #game_status {
+        width: auto;
+        text-align: right;
+        content-align: right middle;
+    }
+    #game_area {
+        width: 100%;
+        height: 1fr;
+        content-align: center middle;
+        margin: 1 0;
+        border: solid $surface-darken-2;
+        background: $surface-darken-1;
+        padding: 1;
+    }
+    #game_controls {
+        width: 100%;
+        height: auto;
+        content-align: center middle;
+        margin-top: 1;
+        padding-top: 1;
+        border-top: solid $surface-darken-2;
+    }
+    #game_quit {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, app_ref: "FtMsgApp", game_id: str, invite: GameInvite) -> None:
+        super().__init__()
+        self.app_ref = app_ref
+        self.game_id = game_id
+        self.invite = invite
+        self._game_widget: Static | None = None
+
+    def compose(self) -> ComposeResult:
+        with Container(id="game_container"):
+            with Container(id="game_header"):
+                yield Static(f"🎮  {self.invite.game_name}", id="game_title")
+                yield Static("En attente...", id="game_status")
+            with Container(id="game_area"):
+                if self.game_id == "snake":
+                    self._game_widget = SnakeWidget(id="game_widget")
+                    yield self._game_widget
+                elif self.game_id == "tictactoe":
+                    self._game_widget = TicTacToeWidget(self.app_ref, id="game_widget")
+                    yield self._game_widget
+                elif self.game_id == "wordrace":
+                    self._game_widget = WordRaceWidget(self.app_ref, id="game_widget")
+                    yield self._game_widget
+            with Container(id="game_controls"):
+                yield Button("✕  Quitter la partie", id="game_quit", variant="error")
+                if self.game_id == "snake":
+                    yield Static("[dim]⬆ ⬇ ⬅ ➡  bouger  |  [bold]R[/bold] restart  |  [bold]Q[/bold] quitter[/dim]", id="snake_hint")
+
+    def on_mount(self) -> None:
+        self._update_status()
+
+    def _update_status(self) -> None:
+        status = self.query_one("#game_status", Static)
+        invite = self.invite
+        game = get_game(self.game_id)
+        if not game:
+            return
+        if game.is_solo:
+            status.update("[bold green]🕹️ Solo[/bold green]")
+            return
+        count = len(invite.players)
+        if count < game.min_players:
+            status.update(
+                f"[yellow]⏳  En attente... {count}/{game.min_players}[/yellow]"
+            )
+        else:
+            status.update(f"[green]▶  Partie en cours — {count} joueur·euses[/green]")
+
+    def update_game_state(self, state: dict) -> None:
+        self._update_status()
+        if self._game_widget:
+            self._game_widget.state = state
+        if not state.get("active", True):
+            winner = state.get("winner")
+            status = self.query_one("#game_status", Static)
+            if winner:
+                status.update(f"[bold green]🎉  {winner} a gagné !  🎉[/bold green]")
+            else:
+                status.update("[dim]🤝  Partie terminée  🤝[/dim]")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "game_quit":
+            self.app_ref.run_worker(self.app_ref._do_leave_game())
+            self.dismiss()
+
+    def action_close(self) -> None:
+        self.app_ref.run_worker(self.app_ref._do_leave_game())
+        self.dismiss()
+
+    def action_snake_up(self) -> None:
+        self._send_snake_action("up")
+
+    def action_snake_down(self) -> None:
+        self._send_snake_action("down")
+
+    def action_snake_left(self) -> None:
+        self._send_snake_action("left")
+
+    def action_snake_right(self) -> None:
+        self._send_snake_action("right")
+
+    def action_snake_restart(self) -> None:
+        self._send_snake_action("restart")
+
+    def _send_snake_action(self, action: str) -> None:
+        if self.game_id == "snake" and self.app_ref.client.current_game_session:
+            self.app_ref.run_worker(self.app_ref.client.send_game_action(action, {}))
+            if action == "restart" and hasattr(self.app_ref.client.current_game_session, "game_over"):
+                if self.app_ref.client.current_game_session.game_over:
+                    self.app_ref.client.current_game_session = SnakeGame.create_session(
+                        self.app_ref.client.current_game_invite,
+                        on_state_change=self.app_ref.client._on_local_game_state_change,
+                    )
+                    self.app_ref.client.on_game_state_change(
+                        self.app_ref.client.current_game_session.get_render_state()
+                    )
+
+
 class FtMsgApp(App[None]):
     TITLE = "42msg"
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quitter"),
         ("ctrl+b", "toggle_sidebar", "Sidebar"),
-        ("ctrl+s", "toggle_settings", "Paramètres"),
+        ("ctrl+g", "toggle_games", "Jeux"),
+        ("ctrl+s", "toggle_settings", "Parametres"),
+        ("ctrl+e", "copy_mode", "Copier"),
     ]
 
     sidebar_width = reactive(35)
@@ -367,6 +1076,8 @@ class FtMsgApp(App[None]):
         self.client = FTMessageClient(self.login)
         self._has_unread = False
         self.desktop_notifications = True
+        self._chat_history: list[str] = []
+        self._game_screen: GameScreen | None = None
 
     # ------------------------------------------------------------------ #
     # Reactive watchers
@@ -391,6 +1102,92 @@ class FtMsgApp(App[None]):
     def action_toggle_settings(self) -> None:
         self.push_screen(SettingsScreen())
 
+    def action_copy_mode(self) -> None:
+        self.push_screen(CopyScreen(self))
+
+    def action_toggle_games(self) -> None:
+        in_room = bool(self.client.current_channel_name())
+        self.push_screen(GameMenuScreen(in_room=in_room), callback=self._on_game_menu_closed)
+
+    def _on_game_menu_closed(self, game_id: str | None) -> None:
+        if not game_id:
+            return
+        self.run_worker(self._do_start_game(game_id))
+
+    async def _do_start_game(self, game_id: str) -> None:
+        status, invite = await self.client.create_game_invite(game_id)
+        if status == "solo_started":
+            await self._open_game_screen(game_id, invite)
+        elif status == "created":
+            if invite:
+                await self._open_game_screen(game_id, invite)
+        elif status == "not_in_channel":
+            log = self.query_one("#messages", ChatLog)
+            now = time.strftime("%H:%M:%S")
+            log.write(f"[red][{now}] Tu dois être dans un salon pour ce jeu multijoueur[/red]")
+        else:
+            log = self.query_one("#messages", ChatLog)
+            now = time.strftime("%H:%M:%S")
+            log.write(f"[red][{now}] Impossible de créer la partie: {status}[/red]")
+
+    async def _do_join_game(self, invite_id: str) -> None:
+        status = await self.client.join_game_invite(invite_id)
+        if status == "joined":
+            invite = self.client.current_game_invite
+            if invite:
+                await self._open_game_screen(invite.game_id, invite)
+        elif status == "full":
+            self.notify("Partie pleine", severity="warning")
+        elif status == "unknown_invite":
+            self.notify("Invitation inconnue", severity="error")
+        else:
+            self.notify(f"Erreur: {status}", severity="error")
+
+    async def _do_leave_game(self) -> None:
+        await self.client.leave_game()
+        self._game_screen = None
+
+    async def _open_game_screen(self, game_id: str, invite: GameInvite) -> None:
+        screen = GameScreen(self, game_id, invite)
+        self._game_screen = screen
+        self.push_screen(screen)
+
+    def _on_game_invite_received(self, invite: GameInvite) -> None:
+        try:
+            chat_area = self.query_one("#chat_area", Container)
+            for existing in chat_area.query(GameInviteBanner):
+                existing.remove()
+            banner = GameInviteBanner(self, invite)
+            chat_area.mount(banner, before=self.query_one("#compose", Container))
+        except Exception:
+            pass
+
+    def _on_game_state_change(self, state: dict) -> None:
+        if self._game_screen:
+            self._game_screen.update_game_state(state)
+
+    def _on_game_end(self, winner: str | None) -> None:
+        if self._game_screen:
+            self._game_screen.update_game_state({"active": False, "winner": winner})
+        self._game_screen = None
+
+    def _copy_to_clipboard(self, text: str) -> bool:
+        """Copy text to system clipboard using common CLI tools."""
+        if not text:
+            return False
+        for cmd, args in [
+            (["wl-copy"], {}),
+            (["xclip", "-selection", "clipboard"], {}),
+            (["xsel", "--clipboard", "--input"], {}),
+            (["pbcopy"], {}),
+        ]:
+            try:
+                subprocess.run(cmd, input=text.encode(), check=True, capture_output=True, **args)
+                return True
+            except Exception:
+                continue
+        return False
+
     def _desktop_notify(self, title: str, msg: str) -> None:
         if not self.desktop_notifications:
             return
@@ -413,7 +1210,7 @@ class FtMsgApp(App[None]):
             yield DragHandle(self, id="resize_handle")
             with Container(id="chat_area"):
                 with Container(id="chat"):
-                    yield RichLog(id="messages", wrap=True, markup=True, highlight=True)
+                    yield ChatLog(self, id="messages", wrap=True, markup=True, highlight=True)
                 with Container(id="compose"):
                     yield Static("", id="suggestions")
                     yield Input(
@@ -423,16 +1220,33 @@ class FtMsgApp(App[None]):
         yield CustomFooter()
 
     def on_mount(self) -> None:
-        self.query_one("#messages", RichLog).write(
+        self.query_one("#messages", ChatLog).write(
             "[bold green]42msg prêt[/bold green] — "
             "[bold]/create[/bold] [italic]nom max password campus[/italic] "
             "[bold]/list[/bold] [bold]/join[/bold] "
             "[bold]/leave[/bold] [bold]/help[/bold]"
         )
         self.query_one("#message_input", Input).focus()
+        self.client.on_game_invite = self._on_game_invite_received
+        self.client.on_game_state_change = self._on_game_state_change
+        self.client.on_game_end = self._on_game_end
         self.run_worker(self._startup())
         self.set_interval(0.2, self._drain_queues)
         self.set_interval(1.0, self._update_sidebar)
+        self.set_interval(0.15, self._game_tick)
+
+    # ------------------------------------------------------------------ #
+    # Game tick
+    # ------------------------------------------------------------------ #
+
+    async def _game_tick(self) -> None:
+        if self.client.current_game_session and hasattr(self.client.current_game_session, "tick"):
+            try:
+                self.client.current_game_session.tick()
+                if self.client.on_game_state_change:
+                    self.client.on_game_state_change(self.client.current_game_session.get_render_state())
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ #
     # Sidebar updates
@@ -765,6 +1579,58 @@ class FtMsgApp(App[None]):
                     log.write(f"[red][{now}] {target} n'est pas dans le salon[/red]")
                 else:
                     log.write(f"[red][{now}] Envoi MP échoué[/red]")
+            event.input.value = ""
+            return
+
+        if cmd == "/games":
+            self.action_toggle_games()
+            event.input.value = ""
+            return
+
+        if cmd == "/game_start":
+            parts = content.split()
+            if len(parts) < 2:
+                log.write(f"[red][{now}] usage: /game_start <game_id>[/red]")
+                log.write(f"[dim]Disponibles: snake, tictactoe, wordrace[/dim]")
+                event.input.value = ""
+                return
+            await self._do_start_game(parts[1])
+            event.input.value = ""
+            return
+
+        if cmd == "/game_join":
+            parts = content.split()
+            if len(parts) < 2:
+                log.write(f"[red][{now}] usage: /game_join <invite_id>[/red]")
+                event.input.value = ""
+                return
+            await self._do_join_game(parts[1])
+            event.input.value = ""
+            return
+
+        if cmd == "/game_leave":
+            await self._do_leave_game()
+            if self._game_screen:
+                self.pop_screen()
+                self._game_screen = None
+            event.input.value = ""
+            return
+
+        if cmd == "/game_action":
+            parts = content.split()
+            if len(parts) < 2:
+                log.write(f"[red][{now}] usage: /game_action <action> [args...][/red]")
+                event.input.value = ""
+                return
+            action = parts[1]
+            data = {}
+            if action == "move":
+                if len(parts) >= 4:
+                    data = {"x": int(parts[2]), "y": int(parts[3])}
+            elif action == "type":
+                if len(parts) >= 3:
+                    data = {"word": parts[2]}
+            await self.client.send_game_action(action, data)
             event.input.value = ""
             return
 
