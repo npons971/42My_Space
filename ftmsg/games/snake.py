@@ -17,8 +17,12 @@ class SnakeSession(BaseGameSession):
     GRID_W = 20
     GRID_H = 12
 
-    def __init__(self, invite: GameInvite, on_state_change: Callable[[dict[str, Any]], None] | None = None) -> None:
-        super().__init__(invite, on_state_change)
+    def __init__(
+        self, invite: GameInvite,
+        on_state_change: Callable[[dict[str, Any]], None] | None = None,
+        on_score: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        super().__init__(invite, on_state_change, on_score)
         self.snake: list[tuple[int, int]] = [(5, 5), (4, 5), (3, 5)]
         self.direction: tuple[int, int] = (1, 0)
         self.next_direction: tuple[int, int] = (1, 0)
@@ -93,6 +97,9 @@ class SnakeSession(BaseGameSession):
         self._update_state()
         self.broadcast_state()
 
+    def get_final_score(self) -> dict[str, Any]:
+        return {"score": self.score, "length": len(self.snake), "best_score": self.score}
+
     def get_render_state(self) -> dict[str, Any]:
         return {"active": self.is_active, "winner": self.winner, **self.state}
 
@@ -105,10 +112,15 @@ class SnakeGame(BaseGame):
     min_players = 1
     max_players = 1
     is_solo = True
+    score_schema = {"score": "Points", "length": "Taille", "best_score": "Meilleur score"}
 
     @classmethod
-    def create_session(cls, invite: GameInvite, on_state_change: Callable[[dict[str, Any]], None] | None = None) -> SnakeSession:
-        return SnakeSession(invite, on_state_change)
+    def create_session(
+        cls, invite: GameInvite,
+        on_state_change: Callable[[dict[str, Any]], None] | None = None,
+        on_score: Callable[[dict[str, Any]], None] | None = None,
+    ) -> SnakeSession:
+        return SnakeSession(invite, on_state_change, on_score)
 
 
 # --------------------------------------------------------------------------- #

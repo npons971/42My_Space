@@ -24,6 +24,7 @@ _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
     "/msg ", "/kick ", "/ban ", "/settings", "/help", "/quit",
     "/games", "/game_start ", "/game_join ", "/game_leave",
+    "/score", "/score ", "/leaderboard ",
 ]
 
 _USER_COLORS = [
@@ -986,6 +987,7 @@ class GameScreen(ModalScreen):
                     self.app_ref.client.current_game_session = SnakeGame.create_session(
                         self.app_ref.client.current_game_invite,
                         on_state_change=self.app_ref.client._on_local_game_state_change,
+                        on_score=self.app_ref.client._on_game_score,
                     )
                     self.app_ref.client.on_game_state_change(
                         self.app_ref.client.current_game_session.get_render_state()
@@ -1440,6 +1442,9 @@ class FtMsgApp(App[None]):
         "  [bold]/msg <login> <text>[/bold]                      — message privé\n"
         "  [bold]/kick <login>[/bold]                            — expulser (hôte)\n"
         "  [bold]/ban <login>[/bold]                             — bannir (hôte)\n"
+        "  [bold]/score list[/bold]                              — lister tes scores\n"
+        "  [bold]/score <index>[/bold]                           — partager un score dans le salon\n"
+        "  [bold]/leaderboard <index>[/bold]                     — classement du salon pour un jeu\n"
         "  [bold]/settings[/bold]                                — paramètres\n"
         "  [bold]/help[/bold]                                    — cette aide\n"
         "  [bold]/quit[/bold]                                    — quitter\n"
@@ -1642,6 +1647,84 @@ class FtMsgApp(App[None]):
                 if len(parts) >= 3:
                     data = {"word": parts[2]}
             await self.client.send_game_action(action, data)
+            event.input.value = ""
+            return
+
+        if cmd == "/score":
+            parts = content.split()
+            if len(parts) == 1 or parts[1] == "list":
+                games = await self.client.score_list()
+                if not games:
+                    log.write(f"[magenta][{now}] Aucun score enregistré. Joue d'abord ![/magenta]")
+                else:
+                    lines = [f"[magenta][{now}] Scores enregistrés:[/magenta]"]
+                    for idx, gid, name in games:
+                        lines.append(f"  [bold]{idx}[/bold]. {name} [dim]({gid})[/dim]")
+                    log.write("\n".join(lines))
+            else:
+                try:
+                    idx = int(parts[1])
+                except ValueError:
+                    log.write(f"[red][{now}] usage: /score list | /score <index>[/red]")
+                    event.input.value = ""
+                    return
+                games = await self.client.score_list()
+                if idx < 0 or idx >= len(games):
+                    log.write(f"[red][{now}] Index invalide[/red]")
+                    event.input.value = ""
+                    return
+                game_id = games[idx][1]
+                text = await self.client.score_share(game_id)
+                status = await self.client.send_channel_message(text)
+                if status != "sent":
+                    log.write(f"[red][{now}] Impossible d'envoyer le score ({status})[/red]")
+            event.input.value = ""
+            return
+
+        if cmd == "/leaderboard":
+            parts = content.split()
+            if len(parts) < 2:
+                log.write(f"[red][{now}] usage: /leaderboard <index>[/red]")
+                event.input.value = ""
+                return
+            try:
+                idx = int(parts[1])
+            except ValueError:
+                log.write(f"[red][{now}] usage: /leaderboard <index>[/red]")
+                event.input.value = ""
+                return
+            games = await self.client.score_list()
+            if idx < 0 or idx >= len(games):
+                log.write(f"[red][{now}] Index invalide[/red]")
+                event.input.value = ""
+                return
+            game_id = games[idx][1]
+            log.write(f"[cyan][{now}] Demande de classement pour {game_id}...[/cyan]")
+            responses = await self.client.leaderboard_request(game_id)
+            lines = [f"[bold cyan]🏆  Leaderboard {game_id}  🏆[/bold cyan]"]
+            if not responses:
+                lines.append("  Aucune réponse.")
+            else:
+                # Build a table: each row is a player, each column a metric
+                all_keys: set[str] = set()
+                for scores in responses.values():
+                    all_keys.update(scores.keys())
+                # Filter out non-numeric keys for sorting
+                numeric_keys = [k for k in sorted(all_keys) if any(isinstance(scores.get(k), (int, float)) for scores in responses.values())]
+                # Sort players by first numeric key descending (or alpha if none)
+                players = list(responses.keys())
+                if numeric_keys:
+                    sort_key = numeric_keys[0]
+                    players.sort(key=lambda p: responses.get(p, {}).get(sort_key, 0), reverse=True)
+                for rank, player in enumerate(players, start=1):
+                    scores = responses.get(player, {})
+                    score_parts = []
+                    for k in numeric_keys[:3]:  # show first 3 metrics
+                        v = scores.get(k, 0)
+                        score_parts.append(f"{k}={v}")
+                    score_str = ", ".join(score_parts) if score_parts else "—"
+                    lines.append(f"  [bold]{rank}.[/bold] {player:12}  {score_str}")
+            log.write("\n".join(lines))
             event.input.value = ""
             return
 

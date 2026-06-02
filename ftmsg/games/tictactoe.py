@@ -10,8 +10,12 @@ class TicTacToeSession(BaseGameSession):
 
     SYMBOLS = ["X", "O"]
 
-    def __init__(self, invite: GameInvite, on_state_change: Callable[[dict[str, Any]], None] | None = None) -> None:
-        super().__init__(invite, on_state_change)
+    def __init__(
+        self, invite: GameInvite,
+        on_state_change: Callable[[dict[str, Any]], None] | None = None,
+        on_score: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        super().__init__(invite, on_state_change, on_score)
         self.board: list[list[str | None]] = [[None for _ in range(3)] for _ in range(3)]
         self.current_turn_idx = 0
         self._update_state()
@@ -66,6 +70,11 @@ class TicTacToeSession(BaseGameSession):
     def _is_draw(self) -> bool:
         return all(cell is not None for row in self.board for cell in row)
 
+    def get_final_score(self) -> dict[str, Any]:
+        if self.winner:
+            return {"winner": self.winner, "draw": False, "players": self.invite.players}
+        return {"winner": None, "draw": True, "players": self.invite.players}
+
     def _update_state(self) -> None:
         self.state = {
             "board": self.board,
@@ -86,7 +95,12 @@ class TicTacToeGame(BaseGame):
     min_players = 2
     max_players = 2
     is_solo = False
+    score_schema = {"wins": "Victoires", "losses": "Défaites", "draws": "Matchs nuls"}
 
     @classmethod
-    def create_session(cls, invite: GameInvite, on_state_change: Callable[[dict[str, Any]], None] | None = None) -> TicTacToeSession:
-        return TicTacToeSession(invite, on_state_change)
+    def create_session(
+        cls, invite: GameInvite,
+        on_state_change: Callable[[dict[str, Any]], None] | None = None,
+        on_score: Callable[[dict[str, Any]], None] | None = None,
+    ) -> TicTacToeSession:
+        return TicTacToeSession(invite, on_state_change, on_score)

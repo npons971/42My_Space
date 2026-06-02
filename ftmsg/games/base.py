@@ -42,9 +42,15 @@ class GameInvite:
 class BaseGameSession:
     """Base class for a game session (one running instance of a game)."""
 
-    def __init__(self, invite: GameInvite, on_state_change: Callable[[dict[str, Any]], None] | None = None) -> None:
+    def __init__(
+        self,
+        invite: GameInvite,
+        on_state_change: Callable[[dict[str, Any]], None] | None = None,
+        on_score: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.invite = invite
         self.on_state_change = on_state_change
+        self.on_score = on_score
         self.state: dict[str, Any] = {}
         self.is_active = True
         self.winner: str | None = None
@@ -57,6 +63,10 @@ class BaseGameSession:
         """Return a serializable state for UI rendering."""
         return {"active": self.is_active, "winner": self.winner, **self.state}
 
+    def get_final_score(self) -> dict[str, Any]:
+        """Return a dict of score metrics for this finished session."""
+        return {}
+
     def broadcast_state(self) -> None:
         if self.on_state_change:
             self.on_state_change(self.get_render_state())
@@ -65,6 +75,13 @@ class BaseGameSession:
         self.is_active = False
         self.winner = winner
         self.broadcast_state()
+        if self.on_score:
+            try:
+                score = self.get_final_score()
+                if score:
+                    self.on_score(score)
+            except Exception:
+                pass
 
 
 class BaseGame:
@@ -76,9 +93,14 @@ class BaseGame:
     min_players: int = 1
     max_players: int = 1
     is_solo: bool = True
+    score_schema: dict[str, str] = {}
 
     @classmethod
-    def create_session(cls, invite: GameInvite, on_state_change: Callable[[dict[str, Any]], None] | None = None) -> BaseGameSession:
+    def create_session(
+        cls, invite: GameInvite,
+        on_state_change: Callable[[dict[str, Any]], None] | None = None,
+        on_score: Callable[[dict[str, Any]], None] | None = None,
+    ) -> BaseGameSession:
         raise NotImplementedError
 
 

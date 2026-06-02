@@ -373,6 +373,10 @@ class ChannelServer:
                     if self.on_message:
                         self.on_message(login, display, now)
 
+                else:
+                    # Transparently broadcast unknown frames (game actions, score requests, etc.)
+                    await self.broadcast(frame, exclude=login)
+
         except (asyncio.IncompleteReadError, ConnectionError, OSError, TimeoutError):
             pass
         finally:
@@ -630,7 +634,7 @@ class ChannelClient:
                     if sender and self.on_typing:
                         self.on_typing(sender)
 
-                elif ftype.startswith("GAME_"):
+                elif ftype.startswith(("GAME_", "SCORE_")):
                     if self.on_game_frame:
                         self.on_game_frame(frame)
 

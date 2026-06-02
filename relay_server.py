@@ -383,6 +383,8 @@ _HANDLERS = {
     "GAME_STATE": _handle_game_frame,
     "GAME_ACTION": _handle_game_frame,
     "GAME_END": _handle_game_frame,
+    "SCORE_REQ": _handle_game_frame,
+    "SCORE_RESP": _handle_game_frame,
 }
 
 

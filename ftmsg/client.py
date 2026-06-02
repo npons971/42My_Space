@@ -22,6 +22,7 @@ from .crypto import (
 )
 from .discovery import BroadcastDiscovery, ChannelInfo, DiscoveredChannel
 from .games.base import GameInvite, BaseGameSession, get_game, list_games, list_multiplayer_games
+from .profile import ProfileManager
 from .security import generate_or_load_signing_keypair
 from .store import MessageStore
 from .trust import TrustStore
@@ -43,7 +44,7 @@ class FTMessageClient:
 
         self.store = MessageStore(self.db_path)
         self.trust = TrustStore(self.db_path)
-        self.trust = TrustStore(self.db_path)
+        self.profile = ProfileManager(login)
         self.local_ip = os.environ.get("FTMSG_LOCAL_IP")
         self.relay_url = os.environ.get("FTMSG_RELAY_URL")
 
@@ -77,6 +78,11 @@ class FTMessageClient:
         self.on_game_state_change: Callable[[dict[str, Any]], None] | None = None
         self.on_game_invite: Callable[[GameInvite], None] | None = None
         self.on_game_end: Callable[[str | None], None] | None = None
+
+        # Score/leaderboard state
+        self._score_responses: dict[str, dict[str, Any]] = {}
+        self._score_request_id: str = ""
+        self._score_request_game_id: str = ""
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -231,7 +237,7 @@ class FTMessageClient:
                     sender = str(frame.get("login", ""))
                     if sender:
                         self._on_typing(sender)
-                elif ftype.startswith("GAME_"):
+                elif ftype.startswith(("GAME_", "SCORE_")):
                     if self._loop:
                         asyncio.run_coroutine_threadsafe(
                             self._handle_game_frame(frame),
@@ -703,6 +709,69 @@ class FTMessageClient:
     # Games
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    # Score & Profile
+    # ------------------------------------------------------------------ #
+
+    def _on_game_score(self, score_dict: dict[str, Any]) -> None:
+        """Called when a solo/host game session ends and reports a score."""
+        if not self.current_game_invite:
+            return
+        game_id = self.current_game_invite.game_id
+        self._record_score_for_game(game_id, score_dict, is_host=True)
+
+    def _record_score_for_game(self, game_id: str, score_dict: dict[str, Any], is_host: bool = False) -> None:
+        if game_id == "snake":
+            score = score_dict.get("score", 0)
+            self.profile.record_score("snake", {"score": score, "best_score": score, "games_played": 1})
+        elif game_id == "tictactoe":
+            winner = score_dict.get("winner")
+            draw = score_dict.get("draw", False)
+            players = score_dict.get("players", [])
+            if draw:
+                self.profile.record_score("tictactoe", {"draws": 1, "games_played": 1})
+            elif winner == self.login:
+                self.profile.record_score("tictactoe", {"wins": 1, "games_played": 1})
+            elif self.login in players:
+                self.profile.record_score("tictactoe", {"losses": 1, "games_played": 1})
+        elif game_id == "wordrace":
+            raw_scores = score_dict.get("scores", {})
+            winner = score_dict.get("winner")
+            my_score = raw_scores.get(self.login, 0)
+            rounds_won = sum(1 for p, s in raw_scores.items() if p == self.login)
+            # We can't know exact rounds won from final state, use my_score as proxy for rounds won
+            self.profile.record_score("wordrace", {
+                "wins": 1 if winner == self.login else 0,
+                "rounds_won": my_score,
+                "games_played": 1,
+            })
+
+    def _record_multiplayer_score(self, invite: GameInvite | None, final_state: dict[str, Any], winner: str | None) -> None:
+        if not invite:
+            return
+        game_id = invite.game_id
+        if game_id == "tictactoe":
+            players = final_state.get("players", invite.players)
+            draw = winner is None and all(cell is not None for row in final_state.get("board", []) for cell in row)
+            if draw:
+                self.profile.record_score("tictactoe", {"draws": 1, "games_played": 1})
+            elif winner == self.login:
+                self.profile.record_score("tictactoe", {"wins": 1, "games_played": 1})
+            elif self.login in players:
+                self.profile.record_score("tictactoe", {"losses": 1, "games_played": 1})
+        elif game_id == "wordrace":
+            scores = final_state.get("scores", {})
+            my_score = scores.get(self.login, 0)
+            self.profile.record_score("wordrace", {
+                "wins": 1 if winner == self.login else 0,
+                "rounds_won": my_score,
+                "games_played": 1,
+            })
+
+    # ------------------------------------------------------------------ #
+    # Games
+    # ------------------------------------------------------------------ #
+
     async def _handle_game_frame(self, frame: dict[str, Any]) -> None:
         ftype = frame.get("type")
         if ftype == "GAME_INVITE":
@@ -743,6 +812,9 @@ class FTMessageClient:
                     await self.broadcast_game_state()
         elif ftype == "GAME_END":
             winner = frame.get("winner")
+            final_state = frame.get("final_state", {})
+            if not self.is_hosting:
+                self._record_multiplayer_score(self.current_game_invite, final_state, winner)
             if self.on_game_end:
                 self.on_game_end(winner)
             await self.events_queue.put(
@@ -750,6 +822,68 @@ class FTMessageClient:
             )
             self.current_game_session = None
             self.current_game_invite = None
+        elif ftype.startswith("SCORE_"):
+            await self._handle_score_frame(frame)
+
+    async def _handle_score_frame(self, frame: dict[str, Any]) -> None:
+        ftype = frame.get("type")
+        if ftype == "SCORE_REQ":
+            req_id = frame.get("request_id", "")
+            game_id = frame.get("game_id", "")
+            my_scores = self.profile.get_game_score(game_id)
+            resp = {
+                "type": "SCORE_RESP",
+                "request_id": req_id,
+                "game_id": game_id,
+                "login": self.login,
+                "scores": my_scores or {},
+            }
+            await self._send_game_frame(resp)
+        elif ftype == "SCORE_RESP":
+            req_id = frame.get("request_id", "")
+            if req_id == self._score_request_id:
+                login = frame.get("login", "")
+                scores = frame.get("scores", {})
+                self._score_responses[login] = scores
+
+    async def score_share(self, game_id: str) -> str:
+        """Return a formatted score string for the given game_id."""
+        scores = self.profile.get_game_score(game_id)
+        if not scores:
+            return f"Aucun score enregistré pour {game_id}"
+        lines = [f"📊  Score de {self.login} sur {game_id}  📊"]
+        for key, value in scores.items():
+            lines.append(f"  {key}: {value}")
+        return "\n".join(lines)
+
+    async def score_list(self) -> list[tuple[int, str, str]]:
+        """Return a list of (index, game_id, game_name) for games with saved scores."""
+        game_ids = self.profile.list_games_with_scores()
+        result: list[tuple[int, str, str]] = []
+        for i, gid in enumerate(game_ids):
+            g = get_game(gid)
+            name = g.name if g else gid
+            result.append((i, gid, name))
+        return result
+
+    async def leaderboard_request(self, game_id: str) -> dict[str, dict[str, Any]]:
+        """Broadcast a score request and collect responses for ~2.5s."""
+        import uuid
+        req_id = str(uuid.uuid4())[:8]
+        self._score_request_id = req_id
+        self._score_request_game_id = game_id
+        self._score_responses.clear()
+        # Include ourselves
+        self._score_responses[self.login] = self.profile.get_game_score(game_id) or {}
+
+        frame = {
+            "type": "SCORE_REQ",
+            "request_id": req_id,
+            "game_id": game_id,
+        }
+        await self._send_game_frame(frame)
+        await asyncio.sleep(2.5)
+        return dict(self._score_responses)
 
     async def create_game_invite(self, game_id: str) -> tuple[str, GameInvite | None]:
         game = get_game(game_id)
@@ -766,7 +900,7 @@ class FTMessageClient:
             )
             self.active_invites[invite.invite_id] = invite
             self.current_game_invite = invite
-            session = game.create_session(invite, on_state_change=self._on_local_game_state_change)
+            session = game.create_session(invite, on_state_change=self._on_local_game_state_change, on_score=self._on_game_score)
             self.current_game_session = session
             return "solo_started", invite
 
@@ -805,7 +939,7 @@ class FTMessageClient:
 
         game = get_game(invite.game_id)
         if game and not game.is_solo:
-            session = game.create_session(invite, on_state_change=self._on_local_game_state_change)
+            session = game.create_session(invite, on_state_change=self._on_local_game_state_change, on_score=self._on_game_score)
             self.current_game_session = session
 
         # If we are the host and have enough players, start the game
@@ -851,10 +985,12 @@ class FTMessageClient:
     async def end_current_game(self, winner: str | None = None) -> None:
         if not self.current_game_invite:
             return
+        final_state = self.current_game_session.get_render_state() if self.current_game_session else {}
         frame = {
             "type": "GAME_END",
             "invite_id": self.current_game_invite.invite_id,
             "winner": winner,
+            "final_state": final_state,
         }
         await self._send_game_frame(frame)
         self.current_game_session = None
@@ -866,7 +1002,7 @@ class FTMessageClient:
         game = get_game(self.current_game_invite.game_id)
         if not game:
             return
-        session = game.create_session(self.current_game_invite, on_state_change=self._on_host_game_state_change)
+        session = game.create_session(self.current_game_invite, on_state_change=self._on_host_game_state_change, on_score=self._on_game_score)
         self.current_game_session = session
         await self.broadcast_game_state()
 

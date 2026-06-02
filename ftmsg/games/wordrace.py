@@ -21,8 +21,12 @@ class WordRaceSession(BaseGameSession):
     ]
     ROUNDS = 5
 
-    def __init__(self, invite: GameInvite, on_state_change: Callable[[dict[str, Any]], None] | None = None) -> None:
-        super().__init__(invite, on_state_change)
+    def __init__(
+        self, invite: GameInvite,
+        on_state_change: Callable[[dict[str, Any]], None] | None = None,
+        on_score: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        super().__init__(invite, on_state_change, on_score)
         self.scores: dict[str, int] = {p: 0 for p in invite.players}
         self.round = 0
         self.current_word = ""
@@ -69,6 +73,9 @@ class WordRaceSession(BaseGameSession):
         if self.is_active:
             self._next_round()
 
+    def get_final_score(self) -> dict[str, Any]:
+        return {"scores": dict(self.scores), "winner": self.winner, "rounds_played": self.round}
+
     def _update_state(self) -> None:
         self.state = {
             "round": self.round,
@@ -91,7 +98,12 @@ class WordRaceGame(BaseGame):
     min_players = 2
     max_players = 4
     is_solo = False
+    score_schema = {"wins": "Victoires", "rounds_won": "Rounds gagnés", "games_played": "Parties jouées"}
 
     @classmethod
-    def create_session(cls, invite: GameInvite, on_state_change: Callable[[dict[str, Any]], None] | None = None) -> WordRaceSession:
-        return WordRaceSession(invite, on_state_change)
+    def create_session(
+        cls, invite: GameInvite,
+        on_state_change: Callable[[dict[str, Any]], None] | None = None,
+        on_score: Callable[[dict[str, Any]], None] | None = None,
+    ) -> WordRaceSession:
+        return WordRaceSession(invite, on_state_change, on_score)
