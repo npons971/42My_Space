@@ -9,6 +9,8 @@ sur TCP. Pas de serveur central — chaque salon est hébergé par son créateur
 curl -fsSL https://raw.githubusercontent.com/npons971/42My_Space/master/install.sh | bash
 ```
 
+> Si le curl échoue (repo privé, pas d'accès Internet, etc.), utilise l'[installation manuelle](#installation-manuelle) ci-dessous.
+
 Puis relance ton shell ou source ton rc :
 
 ```bash
@@ -25,6 +27,26 @@ Avec un pseudo spécifique :
 
 ```bash
 42msg --login mon_login
+```
+
+---
+
+## Installation manuelle
+
+Si le curl ne fonctionne pas, clone le dépôt et installe localement :
+
+```bash
+git clone https://github.com/npons971/42My_Space.git ~/.local/share/42msg
+cd ~/.local/share/42msg
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/42msg <<'EOF'
+#!/usr/bin/env bash
+exec "$HOME/.local/share/42msg/.venv/bin/python" -m ftmsg "$@"
+EOF
+chmod +x ~/.local/bin/42msg
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ---

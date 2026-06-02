@@ -19,6 +19,7 @@ log_error() { echo -e "${RED}[42msg]${NC} $1" >&2; }
 
 command -v git >/dev/null 2>&1 || { log_error "git est requis mais non installé."; exit 1; }
 command -v python3 >/dev/null 2>&1 || { log_error "python3 est requis mais non installé."; exit 1; }
+python3 -m venv --help >/dev/null 2>&1 || { log_error "python3 -m venv ne fonctionne pas. Installe le paquet python3-venv (ou python3-virtualenv)."; exit 1; }
 
 if [ -d "${INSTALL_DIR}" ]; then
     log_warn "Répertoire ${INSTALL_DIR} existe déjà. Mise à jour..."
@@ -34,6 +35,11 @@ cd "${INSTALL_DIR}"
 if [ ! -d "${VENV_DIR}" ]; then
     log_info "Création du venv Python..."
     python3 -m venv "${VENV_DIR}"
+fi
+
+if [ ! -x "${VENV_DIR}/bin/pip" ]; then
+    log_error "pip introuvable dans le venv. Essaie: python3 -m ensurepip --upgrade"
+    exit 1
 fi
 
 log_info "Installation des dépendances..."

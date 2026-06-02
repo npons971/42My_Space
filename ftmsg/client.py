@@ -117,19 +117,35 @@ class FTMessageClient:
             await self.events_queue.put("⚠️ websockets non installé, mode relais inactif.")
             return
 
-        try:
-            self.ws = await websockets.connect(self.relay_url)
-            await self.ws.send(json.dumps({"type": "REGISTER", "login": self.login}))
-            raw = await self.ws.recv()
-            resp = json.loads(raw)
-            if resp.get("type") == "REGISTERED":
-                await self.events_queue.put(f"Connecté au relais {self.relay_url}")
-                self._relay_task = asyncio.create_task(self._relay_loop())
-                await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
-            else:
-                await self.events_queue.put(f"⚠️ Relais refusé: {resp.get('reason')}")
-        except Exception as e:
-            await self.events_queue.put(f"⚠️ Erreur relais: {e}")
+        last_error: Exception | None = None
+        max_retries = 5
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.ws = await websockets.connect(self.relay_url)
+                await self.ws.send(json.dumps({"type": "REGISTER", "login": self.login}))
+                raw = await self.ws.recv()
+                resp = json.loads(raw)
+                if resp.get("type") == "REGISTERED":
+                    await self.events_queue.put(f"Connecté au relais {self.relay_url}")
+                    self._relay_task = asyncio.create_task(self._relay_loop())
+                    await self.ws.send(json.dumps({"type": "LIST_CHANNELS"}))
+                    return
+                else:
+                    await self.events_queue.put(f"⚠️ Relais refusé: {resp.get('reason')}")
+                    return
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    await self.events_queue.put(
+                        f"⚠️ Relais indisponible (tentative {attempt}/{max_retries}), nouvelle tentative dans 10s..."
+                    )
+                    await asyncio.sleep(10)
+                else:
+                    break
+
+        await self.events_queue.put(
+            f"⚠️ Erreur relais: {last_error}"
+        )
 
     async def _relay_loop(self) -> None:
         if self.ws is None:
