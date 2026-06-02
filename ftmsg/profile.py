@@ -71,4 +71,16 @@ class ProfileManager:
         return {k: dict(v) for k, v in self._data.get("scores", {}).items()}
 
     def get_summary(self) -> dict[str, Any]:
-        return {"login": self.login, "scores": self.get_all_scores()}
+        return {
+            "login": self.login,
+            "bio": self._data.get("bio", "Aucune bio."),
+            "status": self._data.get("status", "Disponible"),
+            "scores": self.get_all_scores()
+        }
+
+    def update_profile(self, bio: str | None = None, status: str | None = None) -> None:
+        if bio is not None:
+            self._data["bio"] = bio
+        if status is not None:
+            self._data["status"] = status
+        _save_json(self._data)

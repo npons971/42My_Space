@@ -8,7 +8,7 @@ import subprocess
 import time
 
 from textual.app import App, ComposeResult
-from textual.containers import Container, Grid, Horizontal
+from textual.containers import Container, Grid, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, RichLog, Static, TextArea
@@ -24,7 +24,7 @@ _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
     "/msg ", "/kick ", "/ban ", "/settings", "/help", "/quit",
     "/games", "/game_start ", "/game_join ", "/game_leave",
-    "/score", "/score ", "/leaderboard ",
+    "/score", "/score ", "/leaderboard ", "/profile", "/profile "
 ]
 
 _USER_COLORS = [
@@ -388,6 +388,111 @@ class CopyScreen(ModalScreen):
             else:
                 self.app_ref.notify("Impossible de copier (presse-papier non accessible)", severity="error")
         elif event.button.id == "copy_close":
+            self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+# --------------------------------------------------------------------------- #
+# Profile Screen
+# --------------------------------------------------------------------------- #
+class ProfileScreen(ModalScreen):
+    """Ecran modal pour visualiser un profil utilisateur."""
+
+    BINDINGS = [
+        ("escape", "close", "Fermer"),
+    ]
+
+    DEFAULT_CSS = """
+    ProfileScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+    #profile_container {
+        width: 70;
+        height: auto;
+        max-height: 85%;
+        background: $surface;
+        border: double $primary;
+        padding: 1;
+    }
+    .profile-info {
+        height: auto;
+        padding: 1 2;
+        margin-bottom: 1;
+        border: solid $secondary;
+        background: $panel;
+    }
+    .profile-status {
+        text-style: bold;
+        color: $success;
+        margin-bottom: 1;
+    }
+    .profile-bio {
+        color: $text-muted;
+        text-style: italic;
+    }
+    .profile-scores-container {
+        height: auto;
+        max-height: 40%;
+        overflow-y: auto;
+        border: round $accent;
+        padding: 1;
+        background: $panel;
+        margin-bottom: 1;
+    }
+    .game-card {
+        margin-bottom: 1;
+        padding: 0 1;
+    }
+    .game-card-title {
+        text-style: bold;
+        color: $warning;
+    }
+    .game-stat {
+        margin-left: 2;
+        color: $text-muted;
+    }
+    #profile_close {
+        width: 100%;
+    }
+    """
+
+    def __init__(self, target_user: str, profile_data: dict[str, Any], **kwargs):
+        super().__init__(**kwargs)
+        self.target_user = target_user
+        self.profile_data = profile_data
+
+    def compose(self) -> ComposeResult:
+        bio = self.profile_data.get("bio", "Aucune bio.")
+        status = self.profile_data.get("status", "Disponible")
+        scores = self.profile_data.get("scores", {})
+
+        with Container(id="profile_container") as container:
+            container.border_title = f"✨ Profil de {self.target_user} ✨"
+            
+            with Vertical(classes="profile-info"):
+                yield Static(f"🟢 [b]Statut:[/b] {status}", classes="profile-status")
+                yield Static(f"📝 [b]Bio:[/b] {bio}", classes="profile-bio")
+            
+            if scores:
+                with Vertical(classes="profile-scores-container") as scores_container:
+                    scores_container.border_title = "🏆 Scores & Statistiques"
+                    for game_id, game_scores in scores.items():
+                        with Vertical(classes="game-card"):
+                            yield Static(f"🎮 {game_id.upper()}", classes="game-card-title")
+                            for k, v in game_scores.items():
+                                yield Static(f"• {k.replace('_', ' ').capitalize()}: [b white]{v}[/b white]", classes="game-stat")
+            else:
+                with Vertical(classes="profile-scores-container") as scores_container:
+                    scores_container.border_title = "🏆 Scores & Statistiques"
+                    yield Static("😴 Aucun score enregistré pour le moment.", classes="profile-bio")
+
+            yield Button("Fermer", variant="primary", id="profile_close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "profile_close":
             self.dismiss()
 
     def action_close(self) -> None:
@@ -1445,6 +1550,10 @@ class FtMsgApp(App[None]):
         "  [bold]/score list[/bold]                              — lister tes scores\n"
         "  [bold]/score <index>[/bold]                           — partager un score dans le salon\n"
         "  [bold]/leaderboard <index>[/bold]                     — classement du salon pour un jeu\n"
+        "  [bold]/profile[/bold]                                 — voir ton profil\n"
+        "  [bold]/profile <login>[/bold]                         — voir le profil d'un joueur\n"
+        "  [bold]/profile bio <texte>[/bold]                     — changer ta bio\n"
+        "  [bold]/profile status <texte>[/bold]                  — changer ton statut\n"
         "  [bold]/settings[/bold]                                — paramètres\n"
         "  [bold]/help[/bold]                                    — cette aide\n"
         "  [bold]/quit[/bold]                                    — quitter\n"
@@ -1647,6 +1756,35 @@ class FtMsgApp(App[None]):
                 if len(parts) >= 3:
                     data = {"word": parts[2]}
             await self.client.send_game_action(action, data)
+            event.input.value = ""
+            return
+
+        if cmd == "/profile":
+            parts = content.split(" ", 2)
+            if len(parts) >= 3 and parts[1] == "bio":
+                self.client.profile.update_profile(bio=parts[2])
+                log.write(f"[green][{now}] Bio mise à jour.[/green]")
+                event.input.value = ""
+                return
+            elif len(parts) >= 3 and parts[1] == "status":
+                self.client.profile.update_profile(status=parts[2])
+                log.write(f"[green][{now}] Statut mis à jour.[/green]")
+                event.input.value = ""
+                return
+
+            target_user = parts[1] if len(parts) > 1 else self.client.login
+            
+            if target_user != self.client.login and not self.client.current_channel_name():
+                log.write(f"[red][{now}] Tu dois être dans un salon pour voir le profil des autres joueurs.[/red]")
+                event.input.value = ""
+                return
+                
+            profile_data = await self.client.profile_request(target_user)
+            if not profile_data:
+                log.write(f"[red][{now}] Impossible de récupérer le profil de {target_user} (utilisateur introuvable ou ne répond pas).[/red]")
+            else:
+                self.push_screen(ProfileScreen(target_user, profile_data))
+                
             event.input.value = ""
             return
 

@@ -85,6 +85,10 @@ class FTMessageClient:
         self._score_request_id: str = ""
         self._score_request_game_id: str = ""
 
+        # Profile state
+        self._profile_responses: dict[str, dict[str, Any]] = {}
+        self._profile_request_id: str = ""
+
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         await self.store.init()
@@ -860,6 +864,28 @@ class FTMessageClient:
             self.current_game_invite = None
         elif ftype.startswith("SCORE_"):
             await self._handle_score_frame(frame)
+        elif ftype.startswith("PROFILE_"):
+            await self._handle_profile_frame(frame)
+
+    async def _handle_profile_frame(self, frame: dict[str, Any]) -> None:
+        ftype = frame.get("type")
+        if ftype == "PROFILE_REQ":
+            req_id = frame.get("request_id", "")
+            target_login = frame.get("target_login", "")
+            if target_login == self.login:
+                resp = {
+                    "type": "PROFILE_RESP",
+                    "request_id": req_id,
+                    "profile": self.profile.get_summary(),
+                }
+                await self._send_game_frame(resp)
+        elif ftype == "PROFILE_RESP":
+            req_id = frame.get("request_id", "")
+            if req_id == self._profile_request_id:
+                profile = frame.get("profile", {})
+                login = profile.get("login", "")
+                if login:
+                    self._profile_responses[login] = profile
 
     async def _handle_score_frame(self, frame: dict[str, Any]) -> None:
         ftype = frame.get("type")
@@ -920,6 +946,31 @@ class FTMessageClient:
         await self._send_game_frame(frame)
         await asyncio.sleep(2.5)
         return dict(self._score_responses)
+
+    async def profile_request(self, target_login: str) -> dict[str, Any] | None:
+        """Broadcast a profile request and wait for a response."""
+        import uuid
+        req_id = str(uuid.uuid4())[:8]
+        self._profile_request_id = req_id
+        self._profile_responses.clear()
+        
+        if target_login == self.login:
+            return self.profile.get_summary()
+
+        frame = {
+            "type": "PROFILE_REQ",
+            "request_id": req_id,
+            "target_login": target_login,
+        }
+        await self._send_game_frame(frame)
+        
+        # Wait up to 2 seconds for a response
+        for _ in range(20):
+            if target_login in self._profile_responses:
+                return self._profile_responses[target_login]
+            await asyncio.sleep(0.1)
+            
+        return None
 
     async def create_game_invite(self, game_id: str) -> tuple[str, GameInvite | None]:
         game = get_game(game_id)
