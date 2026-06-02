@@ -634,7 +634,7 @@ class ChannelClient:
                     if sender and self.on_typing:
                         self.on_typing(sender)
 
-                elif ftype.startswith(("GAME_", "SCORE_")):
+                elif ftype.startswith(("GAME_", "SCORE_", "PROFILE_")):
                     if self.on_game_frame:
                         self.on_game_frame(frame)
 

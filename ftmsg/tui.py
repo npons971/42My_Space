@@ -19,6 +19,13 @@ from .games.base import GameInvite, list_games, list_multiplayer_games, get_game
 from .games.snake import SnakeWidget, SnakeGame
 from .games.tictactoe import TicTacToeGame
 from .games.wordrace import WordRaceGame
+from .games.chess import ChessGame
+from .games.connectfour import ConnectFourGame
+from .games.reversi import ReversiGame
+from .games.battleship import BattleshipGame
+from .games.hangman import HangmanGame
+from .games.minesweeper import MinesweeperGame
+from .games.widgets import ConnectFourWidget, ReversiWidget, BattleshipWidget, HangmanWidget, MinesweeperWidget
 
 _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
@@ -696,6 +703,128 @@ class GameInviteBanner(Horizontal):
 # --------------------------------------------------------------------------- #
 # Game Widgets
 # --------------------------------------------------------------------------- #
+class ChessWidget(Container):
+    """Interactive Chess board."""
+
+    state = reactive(dict)
+
+    DEFAULT_CSS = """
+    ChessWidget {
+        width: auto;
+        height: auto;
+        content-align: center middle;
+        padding: 1;
+    }
+    #chess_info {
+        height: auto;
+        content-align: center middle;
+        margin-bottom: 1;
+    }
+    #chess_grid {
+        grid-size: 8 8;
+        grid-gutter: 0;
+        width: auto;
+        height: auto;
+        content-align: center middle;
+    }
+    #chess_grid Button {
+        width: 5;
+        height: 3;
+        content-align: center middle;
+        text-style: bold;
+        min-width: 5;
+    }
+    """
+
+    def __init__(self, app_ref: "FtMsgApp", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+        self.selected_square: str | None = None
+
+    def compose(self) -> ComposeResult:
+        with Container(id="chess_info"):
+            yield Static("", id="chess_status")
+        with Grid(id="chess_grid"):
+            for rank in range(8, 0, -1):
+                for file_idx, f in enumerate("abcdefgh"):
+                    sq = f"{f}{rank}"
+                    yield Button("", id=f"chess_cell_{sq}", variant="default")
+
+    def watch_state(self, new_state: dict) -> None:
+        self._update_ui(new_state)
+
+    def _update_ui(self, st: dict) -> None:
+        import chess
+        fen = st.get("fen", chess.STARTING_FEN)
+        current = st.get("current_player", "")
+        winner = st.get("winner")
+        active = st.get("active", True)
+        players = st.get("players", [])
+        white_player = st.get("white_player", "")
+        black_player = st.get("black_player", "")
+        
+        status = self.query_one("#chess_status", Static)
+        lines: list[str] = []
+        lines.append("[bold]♟  C h e s s  ♙[/bold]")
+        lines.append("")
+
+        if winner:
+            if winner == self.app_ref.login:
+                lines.append(f"[bold green]🎉  Tu as gagné !  🎉[/bold green]")
+            else:
+                lines.append(f"[bold red]😞  {winner} a gagné  😞[/bold red]")
+        elif not active:
+            lines.append("[dim]🤝  Match nul  🤝[/dim]")
+        else:
+            my_turn = current == self.app_ref.login
+            if my_turn:
+                lines.append(f"[bold green]👉  C'est ton tour[/bold green]")
+            else:
+                lines.append(f"[dim]Tour de {current}...[/dim]")
+            if self.app_ref.login == white_player:
+                lines.append(f"[dim]Tu joues les Blancs[/dim]")
+            elif self.app_ref.login == black_player:
+                lines.append(f"[dim]Tu joues les Noirs[/dim]")
+                
+        status.update("\n".join(lines))
+
+        board = chess.Board(fen)
+        my_turn = (current == self.app_ref.login)
+
+        for rank in range(8, 0, -1):
+            for file_idx, f in enumerate("abcdefgh"):
+                sq = f"{f}{rank}"
+                btn = self.query_one(f"#chess_cell_{sq}", Button)
+                
+                # Checkered background logic
+                is_light = (rank + file_idx) % 2 != 0
+                bg = "white" if is_light else "rgb(150,150,150)"
+                btn.styles.background = bg
+
+                piece = board.piece_at(chess.parse_square(sq))
+                if piece:
+                    # piece.symbol() gives a letter. Let's use unicode_symbol()
+                    btn.label = f"[black]{piece.unicode_symbol()}[/black]"
+                else:
+                    btn.label = ""
+                
+                btn.disabled = not active or not my_turn or winner is not None
+                
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id and event.button.id.startswith("chess_cell_"):
+            sq = event.button.id.split("_")[-1]
+            if not self.selected_square:
+                self.selected_square = sq
+            else:
+                move = f"{self.selected_square}{sq}"
+                self.selected_square = None
+                self.app_ref.run_worker(
+                    self.app_ref.client.send_game_action("move", {"move": move})
+                )
+
+# --------------------------------------------------------------------------- #
+# Game Widgets
+# --------------------------------------------------------------------------- #
 class TicTacToeWidget(Container):
     """Interactive Tic-Tac-Toe grid with clickable buttons."""
 
@@ -875,6 +1004,7 @@ class WordRaceWidget(Container):
         yield Static("", id="wr_word")
         yield Static("", id="wr_scores")
         yield Static("", id="wr_status")
+        yield Button("Next Round ➔", id="wr_next", variant="primary")
 
     def watch_state(self, new_state: dict) -> None:
         self._update_ui(new_state)
@@ -920,17 +1050,26 @@ class WordRaceWidget(Container):
         scores_widget.update("\n".join(score_lines) if score_lines else "")
 
         status_widget = self.query_one("#wr_status", Static)
+        next_btn = self.query_one("#wr_next", Button)
         if winner:
             if winner == self.app_ref.login:
                 status_widget.update("[bold green]🎉  Tu as gagné la partie !  🎉[/bold green]")
             else:
                 status_widget.update(f"[bold red]😞  {winner} a gagné la partie  😞[/bold red]")
+            next_btn.display = False
         elif not active:
             status_widget.update("[dim]Partie terminée[/dim]")
+            next_btn.display = False
         elif round_winner:
             status_widget.update(f"[yellow]⭐  {round_winner} remporte ce round !  ⭐[/yellow]")
+            next_btn.display = (self.app_ref.client.current_game_invite and self.app_ref.client.current_game_invite.host_login == self.app_ref.login)
         else:
             status_widget.update("[dim]Tape le mot vite avec /game_action type <mot>[/dim]")
+            next_btn.display = False
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "wr_next":
+            self.app_ref.run_worker(self.app_ref.client.send_game_action("next_round", {}))
 
 
 # --------------------------------------------------------------------------- #
@@ -954,7 +1093,8 @@ class GameScreen(ModalScreen):
         align: center middle;
     }
     #game_container {
-        width: 60;
+        width: auto;
+        min-width: 60;
         height: auto;
         background: $surface;
         border: thick $primary;
@@ -1023,6 +1163,24 @@ class GameScreen(ModalScreen):
                 elif self.game_id == "wordrace":
                     self._game_widget = WordRaceWidget(self.app_ref, id="game_widget")
                     yield self._game_widget
+                elif self.game_id == "chess":
+                    self._game_widget = ChessWidget(self.app_ref, id="game_widget")
+                    yield self._game_widget
+                elif self.game_id == "connectfour":
+                    self._game_widget = ConnectFourWidget(self.app_ref, id="game_widget")
+                    yield self._game_widget
+                elif self.game_id == "reversi":
+                    self._game_widget = ReversiWidget(self.app_ref, id="game_widget")
+                    yield self._game_widget
+                elif self.game_id == "battleship":
+                    self._game_widget = BattleshipWidget(self.app_ref, id="game_widget")
+                    yield self._game_widget
+                elif self.game_id == "hangman":
+                    self._game_widget = HangmanWidget(self.app_ref, id="game_widget")
+                    yield self._game_widget
+                elif self.game_id == "minesweeper":
+                    self._game_widget = MinesweeperWidget(self.app_ref, id="game_widget")
+                    yield self._game_widget
             with Container(id="game_controls"):
                 yield Button("✕  Quitter la partie", id="game_quit", variant="error")
                 if self.game_id == "snake":
@@ -1087,16 +1245,6 @@ class GameScreen(ModalScreen):
     def _send_snake_action(self, action: str) -> None:
         if self.game_id == "snake" and self.app_ref.client.current_game_session:
             self.app_ref.run_worker(self.app_ref.client.send_game_action(action, {}))
-            if action == "restart" and hasattr(self.app_ref.client.current_game_session, "game_over"):
-                if self.app_ref.client.current_game_session.game_over:
-                    self.app_ref.client.current_game_session = SnakeGame.create_session(
-                        self.app_ref.client.current_game_invite,
-                        on_state_change=self.app_ref.client._on_local_game_state_change,
-                        on_score=self.app_ref.client._on_game_score,
-                    )
-                    self.app_ref.client.on_game_state_change(
-                        self.app_ref.client.current_game_session.get_render_state()
-                    )
 
 
 class FtMsgApp(App[None]):
@@ -1716,7 +1864,7 @@ class FtMsgApp(App[None]):
             parts = content.split()
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /game_start <game_id>[/red]")
-                log.write(f"[dim]Disponibles: snake, tictactoe, wordrace[/dim]")
+                log.write(f"[dim]Disponibles: snake, tictactoe, wordrace, chess[/dim]")
                 event.input.value = ""
                 return
             await self._do_start_game(parts[1])
@@ -1755,6 +1903,12 @@ class FtMsgApp(App[None]):
             elif action == "type":
                 if len(parts) >= 3:
                     data = {"word": parts[2]}
+            elif action == "set_word":
+                if len(parts) >= 3:
+                    data = {"word": parts[2]}
+            elif action == "guess":
+                if len(parts) >= 3:
+                    data = {"letter": parts[2]}
             await self.client.send_game_action(action, data)
             event.input.value = ""
             return

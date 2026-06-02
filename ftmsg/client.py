@@ -250,7 +250,7 @@ class FTMessageClient:
                     sender = str(frame.get("login", ""))
                     if sender:
                         self._on_typing(sender)
-                elif ftype.startswith(("GAME_", "SCORE_")):
+                elif ftype.startswith(("GAME_", "SCORE_", "PROFILE_")):
                     if self._loop:
                         asyncio.run_coroutine_threadsafe(
                             self._handle_game_frame(frame),
@@ -764,22 +764,20 @@ class FTMessageClient:
         if game_id == "snake":
             score = score_dict.get("score", 0)
             self.profile.record_score("snake", {"score": score, "best_score": score, "games_played": 1})
-        elif game_id == "tictactoe":
+        elif game_id in ["tictactoe", "chess", "connectfour", "reversi", "battleship", "hangman", "minesweeper"]:
             winner = score_dict.get("winner")
             draw = score_dict.get("draw", False)
             players = score_dict.get("players", [])
             if draw:
-                self.profile.record_score("tictactoe", {"draws": 1, "games_played": 1})
+                self.profile.record_score(game_id, {"draws": 1, "games_played": 1})
             elif winner == self.login:
-                self.profile.record_score("tictactoe", {"wins": 1, "games_played": 1})
+                self.profile.record_score(game_id, {"wins": 1, "games_played": 1})
             elif self.login in players:
-                self.profile.record_score("tictactoe", {"losses": 1, "games_played": 1})
+                self.profile.record_score(game_id, {"losses": 1, "games_played": 1})
         elif game_id == "wordrace":
             raw_scores = score_dict.get("scores", {})
             winner = score_dict.get("winner")
             my_score = raw_scores.get(self.login, 0)
-            rounds_won = sum(1 for p, s in raw_scores.items() if p == self.login)
-            # We can't know exact rounds won from final state, use my_score as proxy for rounds won
             self.profile.record_score("wordrace", {
                 "wins": 1 if winner == self.login else 0,
                 "rounds_won": my_score,
@@ -790,15 +788,22 @@ class FTMessageClient:
         if not invite:
             return
         game_id = invite.game_id
-        if game_id == "tictactoe":
+        if game_id in ["tictactoe", "chess", "connectfour", "reversi", "battleship", "hangman", "minesweeper"]:
             players = final_state.get("players", invite.players)
-            draw = winner is None and all(cell is not None for row in final_state.get("board", []) for cell in row)
+            draw = False
+            if game_id == "tictactoe":
+                draw = winner is None and all(cell is not None for row in final_state.get("board", []) for cell in row)
+            elif game_id == "connectfour":
+                draw = winner is None and all(final_state.get("col_full", [False]*7))
+            elif game_id == "chess":
+                draw = winner is None
+            
             if draw:
-                self.profile.record_score("tictactoe", {"draws": 1, "games_played": 1})
+                self.profile.record_score(game_id, {"draws": 1, "games_played": 1})
             elif winner == self.login:
-                self.profile.record_score("tictactoe", {"wins": 1, "games_played": 1})
+                self.profile.record_score(game_id, {"wins": 1, "games_played": 1})
             elif self.login in players:
-                self.profile.record_score("tictactoe", {"losses": 1, "games_played": 1})
+                self.profile.record_score(game_id, {"losses": 1, "games_played": 1})
         elif game_id == "wordrace":
             scores = final_state.get("scores", {})
             my_score = scores.get(self.login, 0)
@@ -831,6 +836,15 @@ class FTMessageClient:
             if self.current_game_invite and self.current_game_invite.invite_id == invite_id:
                 self.current_game_invite.players = invite.players if invite else self.current_game_invite.players
             await self.events_queue.put(f"🎮 {login} a rejoint la partie {invite_id}")
+            
+            if self.current_game_invite and self.current_game_invite.invite_id == invite_id:
+                if self.current_game_invite.host_login == self.login:
+                    game = get_game(self.current_game_invite.game_id)
+                    if game and len(self.current_game_invite.players) >= game.min_players:
+                        await self._start_game_session()
+                    else:
+                        if self.on_game_state_change:
+                            self.on_game_state_change({})
         elif ftype == "GAME_LEAVE":
             invite_id = frame.get("invite_id", "")
             login = frame.get("login", "")
@@ -848,12 +862,12 @@ class FTMessageClient:
                 data = frame.get("data", {})
                 self.current_game_session.handle_action(player, action, data)
                 # Host broadcasts updated state
-                if self.is_hosting:
+                if self.current_game_invite and self.current_game_invite.host_login == self.login:
                     await self.broadcast_game_state()
         elif ftype == "GAME_END":
             winner = frame.get("winner")
             final_state = frame.get("final_state", {})
-            if not self.is_hosting:
+            if self.current_game_invite and self.current_game_invite.host_login != self.login:
                 self._record_multiplayer_score(self.current_game_invite, final_state, winner)
             if self.on_game_end:
                 self.on_game_end(winner)
@@ -864,34 +878,26 @@ class FTMessageClient:
             self.current_game_invite = None
         elif ftype.startswith("SCORE_"):
             await self._handle_score_frame(frame)
-        elif ftype.startswith("PROFILE_"):
-            await self._handle_profile_frame(frame)
-
-    async def _handle_profile_frame(self, frame: dict[str, Any]) -> None:
-        ftype = frame.get("type")
-        if ftype == "PROFILE_REQ":
-            req_id = frame.get("request_id", "")
-            target_login = frame.get("target_login", "")
-            if target_login == self.login:
-                resp = {
-                    "type": "PROFILE_RESP",
-                    "request_id": req_id,
-                    "profile": self.profile.get_summary(),
-                }
-                await self._send_game_frame(resp)
-        elif ftype == "PROFILE_RESP":
-            req_id = frame.get("request_id", "")
-            if req_id == self._profile_request_id:
-                profile = frame.get("profile", {})
-                login = profile.get("login", "")
-                if login:
-                    self._profile_responses[login] = profile
 
     async def _handle_score_frame(self, frame: dict[str, Any]) -> None:
         ftype = frame.get("type")
         if ftype == "SCORE_REQ":
             req_id = frame.get("request_id", "")
             game_id = frame.get("game_id", "")
+            
+            if game_id.startswith("__profile__:"):
+                target_login = game_id.split(":", 1)[1]
+                if target_login == self.login:
+                    resp = {
+                        "type": "SCORE_RESP",
+                        "request_id": req_id,
+                        "game_id": game_id,
+                        "login": self.login,
+                        "scores": self.profile.get_summary(),
+                    }
+                    await self._send_game_frame(resp)
+                return
+
             my_scores = self.profile.get_game_score(game_id)
             resp = {
                 "type": "SCORE_RESP",
@@ -903,9 +909,16 @@ class FTMessageClient:
             await self._send_game_frame(resp)
         elif ftype == "SCORE_RESP":
             req_id = frame.get("request_id", "")
+            game_id = frame.get("game_id", "")
+            login = frame.get("login", "")
+            scores = frame.get("scores", {})
+            
+            if game_id.startswith("__profile__:"):
+                if req_id == self._profile_request_id:
+                    self._profile_responses[login] = scores
+                return
+
             if req_id == self._score_request_id:
-                login = frame.get("login", "")
-                scores = frame.get("scores", {})
                 self._score_responses[login] = scores
 
     async def score_share(self, game_id: str) -> str:
@@ -958,9 +971,9 @@ class FTMessageClient:
             return self.profile.get_summary()
 
         frame = {
-            "type": "PROFILE_REQ",
+            "type": "SCORE_REQ",
             "request_id": req_id,
-            "target_login": target_login,
+            "game_id": f"__profile__:{target_login}",
         }
         await self._send_game_frame(frame)
         
@@ -1026,11 +1039,10 @@ class FTMessageClient:
 
         game = get_game(invite.game_id)
         if game and not game.is_solo:
-            session = game.create_session(invite, on_state_change=self._on_local_game_state_change, on_score=self._on_game_score)
-            self.current_game_session = session
+            pass # Non-hosts do not create a local session, they receive state from the host
 
         # If we are the host and have enough players, start the game
-        if self.is_hosting and invite.host_login == self.login and len(invite.players) >= game.min_players:
+        if invite.host_login == self.login and len(invite.players) >= game.min_players:
             await self._start_game_session()
         return "joined"
 
@@ -1045,17 +1057,23 @@ class FTMessageClient:
     async def send_game_action(self, action: str, data: dict[str, Any]) -> None:
         if not self.current_game_invite:
             return
-        frame = {
-            "type": "GAME_ACTION",
-            "invite_id": self.current_game_invite.invite_id,
-            "login": self.login,
-            "action": action,
-            "data": data,
-        }
-        await self._send_game_frame(frame)
-        # Solo: directly handle locally
+        
+        # Non-hosts send the action to the host via the relay
+        if self.current_game_invite.host_login != self.login:
+            frame = {
+                "type": "GAME_ACTION",
+                "invite_id": self.current_game_invite.invite_id,
+                "login": self.login,
+                "action": action,
+                "data": data,
+            }
+            await self._send_game_frame(frame)
+            return
+
+        # Hosts process the action directly
         if self.current_game_session:
             self.current_game_session.handle_action(self.login, action, data)
+            # Ensure local UI update in case the game loop hasn't ticked (like Snake)
             if self.on_game_state_change:
                 self.on_game_state_change(self.current_game_session.get_render_state())
 
@@ -1084,13 +1102,20 @@ class FTMessageClient:
         self.current_game_invite = None
 
     async def _start_game_session(self) -> None:
-        if not self.current_game_invite or not self.is_hosting:
+        if not self.current_game_invite or self.current_game_invite.host_login != self.login:
             return
+        if self.current_game_session is not None:
+            return
+
         game = get_game(self.current_game_invite.game_id)
         if not game:
             return
         session = game.create_session(self.current_game_invite, on_state_change=self._on_host_game_state_change, on_score=self._on_game_score)
         self.current_game_session = session
+        
+        if self.on_game_state_change:
+            self.on_game_state_change(session.get_render_state())
+            
         await self.broadcast_game_state()
 
     def _on_local_game_state_change(self, state: dict[str, Any]) -> None:

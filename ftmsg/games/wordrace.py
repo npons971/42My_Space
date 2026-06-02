@@ -43,6 +43,10 @@ class WordRaceSession(BaseGameSession):
     def handle_action(self, player: str, action: str, data: dict[str, Any]) -> None:
         if not self.is_active:
             return
+        if action == "next_round":
+            if self.round_winner:
+                self._next_round()
+            return
         if action != "type":
             return
         if self.round_winner:

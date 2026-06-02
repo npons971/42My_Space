@@ -25,7 +25,7 @@ class SnakeSession(BaseGameSession):
         super().__init__(invite, on_state_change, on_score)
         self.snake: list[tuple[int, int]] = [(5, 5), (4, 5), (3, 5)]
         self.direction: tuple[int, int] = (1, 0)
-        self.next_direction: tuple[int, int] = (1, 0)
+        self.move_queue: list[tuple[int, int]] = []
         self.food = self._spawn_food()
         self.score = 0
         self.game_over = False
@@ -51,6 +51,18 @@ class SnakeSession(BaseGameSession):
         }
 
     def handle_action(self, player: str, action: str, data: dict[str, Any]) -> None:
+        if action == "restart" and self.game_over:
+            self.snake = [(self.GRID_W // 2, self.GRID_H // 2)]
+            self.direction = (1, 0)
+            self.move_queue = []
+            self.food = self._spawn_food()
+            self.score = 0
+            self.game_over = False
+            self.is_active = True
+            self.winner = None
+            self._update_state()
+            self.broadcast_state()
+            return
         if self.game_over:
             return
         # Actions: up, down, left, right
@@ -62,23 +74,24 @@ class SnakeSession(BaseGameSession):
         }
         if action in dirs:
             nd = dirs[action]
-            # Prevent reversing directly
-            if (nd[0] * -1, nd[1] * -1) != self.direction:
-                self.next_direction = nd
+            last_dir = self.move_queue[-1] if self.move_queue else self.direction
+            # Prevent reversing directly and ignore redundant moves
+            if (nd[0] * -1, nd[1] * -1) != last_dir and nd != last_dir:
+                if len(self.move_queue) < 3:
+                    self.move_queue.append(nd)
 
     def tick(self) -> None:
         if self.game_over:
             return
         self.tick_count += 1
-        self.direction = self.next_direction
+        
+        if self.move_queue:
+            self.direction = self.move_queue.pop(0)
+            
         head = (self.snake[0][0] + self.direction[0], self.snake[0][1] + self.direction[1])
 
-        # Wall collision
-        if head[0] < 0 or head[0] >= self.GRID_W or head[1] < 0 or head[1] >= self.GRID_H:
-            self.game_over = True
-            self.end_game(winner=None)
-            self._update_state()
-            return
+        # Wrap around map edges (teleport)
+        head = (head[0] % self.GRID_W, head[1] % self.GRID_H)
 
         # Self collision
         if head in self.snake:
@@ -90,7 +103,11 @@ class SnakeSession(BaseGameSession):
         self.snake.insert(0, head)
         if head == self.food:
             self.score += 10
-            self.food = self._spawn_food()
+            if len(self.snake) == self.GRID_W * self.GRID_H:
+                self.game_over = True
+                self.end_game(winner=None)
+            else:
+                self.food = self._spawn_food()
         else:
             self.snake.pop()
 
