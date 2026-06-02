@@ -142,6 +142,7 @@ class FTMessageClient:
                             name=c["name"], host_ip="relay", host_port=0,
                             is_public=c["is_public"], user_count=c["user_count"],
                             max_users=c["max_users"], last_seen=time.time(),
+                            campus_only=c.get("campus_only", False),
                         ))
 
                 elif ftype == "MESSAGE":
@@ -318,7 +319,7 @@ class FTMessageClient:
             logger.debug("room key encryption failed for %s", login, exc_info=True)
 
     async def create_channel(
-        self, name: str, password: str, max_users: int, is_public: bool,
+        self, name: str, password: str, max_users: int, is_public: bool, campus_only: bool = False,
     ) -> str:
         if self.channel_server or self.channel_client or self._relay_current_channel:
             return "already_in_channel"
@@ -333,6 +334,7 @@ class FTMessageClient:
                 "password": password,
                 "max_users": max_users,
                 "is_public": is_public,
+                "campus_only": campus_only,
             }))
             status = await self._pending_create
             if status == "created":
@@ -343,6 +345,14 @@ class FTMessageClient:
         local_ip = self._resolve_local_ip()
         self.room_key = generate_room_key()
 
+        allowed_network = None
+        if campus_only:
+            try:
+                import ipaddress
+                allowed_network = ipaddress.ip_network(f"{local_ip}/24", strict=False)
+            except Exception:
+                logger.debug("failed to compute allowed network", exc_info=True)
+
         def _update_beacon() -> None:
             if self.discovery and self.channel_server:
                 info = ChannelInfo(
@@ -352,6 +362,7 @@ class FTMessageClient:
                     is_public=is_public,
                     user_count=self.channel_server.member_count(),
                     max_users=max_users,
+                    campus_only=campus_only,
                 )
                 self.discovery.update_beacon(info)
 
@@ -372,6 +383,8 @@ class FTMessageClient:
             on_member_join=on_join,
             on_member_leave=self._on_member_leave,
             on_typing=self._on_typing,
+            campus_only=campus_only,
+            allowed_network=allowed_network,
         )
 
         port = await self.channel_server.start(port=0)
@@ -384,14 +397,16 @@ class FTMessageClient:
             is_public=is_public,
             user_count=1,
             max_users=max_users,
+            campus_only=campus_only,
         )
         if self.discovery:
             self.discovery.start_beaconing(info)
             _update_beacon()
 
+        net_label = "campus" if campus_only else "public" if is_public else "privé"
         await self.events_queue.put(
             f"Salon '{name}' créé sur {local_ip}:{port} "
-            f"(max {max_users}, {'public' if is_public else 'privé'})",
+            f"(max {max_users}, {net_label})",
         )
         return "created"
 

@@ -58,7 +58,7 @@ Aucun package n'est installé globalement sur le système.
 
 | Commande | Description |
 |---|---|
-| `/create <nom> <max> [password]` | Créer un salon (sans password = public) |
+| `/create <nom> <max> [password] [campus]` | Créer un salon (sans password = public). Ajoute `campus` pour restreindre au même réseau WiFi. |
 | `/list` | Lister les salons disponibles |
 | `/join <ip> <port> <password>` | Rejoindre un salon |
 | `/join <index> <password>` | Rejoindre depuis l'index `/list` |
@@ -87,6 +87,7 @@ Tape simplement un message puis Entrée pour l'envoyer dans le salon actif.
 - N'importe qui sur le même réseau peut trouver ton salon via `/list`.
 - **Salon privé** : protégé par mot de passe (par défaut).
 - **Salon public** : pas de mot de passe, accessible à tous.
+- **Salon campus** : restreint au même sous-réseau IP (/24) que le créateur. Même s'il connaît l'IP et le port, quelqu'un en dehors du WiFi ne peut pas joindre.
 - Le créateur héberge le salon : s'il quitte, le salon est fermé.
 - Chiffrement de bout en bout des messages via clés NaCl/Curve25519 (mode Direct & Relais).
 

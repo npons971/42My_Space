@@ -11,7 +11,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, RichLog, Static
+from textual.widgets import Button, Header, Input, RichLog, Static
 
 from .client import FTMessageClient, default_login
 
@@ -177,12 +177,16 @@ class SettingsScreen(ModalScreen):
         else:
             encryption = "En attente de clé..."
         members = len(client.list_members())
+        # Show campus-only flag from the server if we are hosting
+        campus_flag = ""
+        if client.is_hosting and client.channel_server and client.channel_server.campus_only:
+            campus_flag = "\n  Campus: 🏫 Oui"
         channel = (
             f"[bold cyan]Salon actif[/bold cyan]\n"
             f"  Nom: [bold]{cname or 'Aucun'}[/bold]\n"
             f"  Rôle: {role}\n"
             f"  Chiffrement: {encryption}\n"
-            f"  Membres: {members}"
+            f"  Membres: {members}{campus_flag}"
         )
         self.query_one("#settings_channel", Static).update(channel)
 
@@ -231,6 +235,43 @@ class SettingsScreen(ModalScreen):
 
     def action_close(self) -> None:
         self.dismiss()
+
+
+class CustomFooter(Horizontal):
+    """Stylized footer with centered action buttons."""
+
+    DEFAULT_CSS = """
+    CustomFooter {
+        height: auto;
+        dock: bottom;
+        background: $surface-darken-1;
+        border-top: solid $primary-darken-2;
+        padding: 0 1;
+    }
+    CustomFooter Button {
+        margin: 0 1;
+    }
+    #footer_spacer_left, #footer_spacer_right {
+        width: 1fr;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="footer_spacer_left")
+        yield Button("Quitter [dim]Ctrl+Q[/dim]", id="footer_quit", variant="error")
+        yield Button("Sidebar [dim]Ctrl+B[/dim]", id="footer_sidebar", variant="primary")
+        yield Button("Paramètres [dim]Ctrl+S[/dim]", id="footer_settings", variant="default")
+        yield Static("", id="footer_spacer_right")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        app = self.app
+        assert isinstance(app, FtMsgApp)
+        if event.button.id == "footer_quit":
+            app.action_quit()
+        elif event.button.id == "footer_sidebar":
+            app.action_toggle_sidebar()
+        elif event.button.id == "footer_settings":
+            app.action_toggle_settings()
 
 
 class FtMsgApp(App[None]):
@@ -379,12 +420,12 @@ class FtMsgApp(App[None]):
                         placeholder="Tape un message ou une commande…",
                         id="message_input",
                     )
-        yield Footer()
+        yield CustomFooter()
 
     def on_mount(self) -> None:
         self.query_one("#messages", RichLog).write(
             "[bold green]42msg prêt[/bold green] — "
-            "[bold]/create[/bold] [italic]nom max password[/italic] "
+            "[bold]/create[/bold] [italic]nom max password campus[/italic] "
             "[bold]/list[/bold] [bold]/join[/bold] "
             "[bold]/leave[/bold] [bold]/help[/bold]"
         )
@@ -423,7 +464,8 @@ class FtMsgApp(App[None]):
         else:
             for i, ch in enumerate(channels):
                 vis = "🔓" if ch.is_public else "🔒"
-                ch_text += f"  [bold]{ch.name}[/bold] {vis}\n"
+                campus = " 🏫" if ch.campus_only else ""
+                ch_text += f"  [bold]{ch.name}[/bold] {vis}{campus}\n"
                 ch_text += f"  └ {ch.user_count}/{ch.max_users} | /join {i}\n"
         channels_box.update(ch_text)
 
@@ -564,7 +606,7 @@ class FtMsgApp(App[None]):
         if cmd == "/help":
             log.write(
                 "[bold magenta]Commandes:[/bold magenta]\n"
-        "  [bold]/create <nom> <max> [password][/bold]  — créer un salon\n"
+        "  [bold]/create <nom> <max> [password] [campus][/bold]  — créer un salon\n"
         "  [bold]/list[/bold]                          — lister les salons\n"
         "  [bold]/join <ip> <port> <password>[/bold]   — rejoindre un salon\n"
         "  [bold]/join <index> <password>[/bold]       — rejoindre depuis /list\n"
@@ -594,9 +636,10 @@ class FtMsgApp(App[None]):
                 lines = [f"[magenta][{now}] Salons disponibles:[/magenta]"]
                 for i, ch in enumerate(channels):
                     vis = "public" if ch.is_public else "privé"
+                    campus = " 🏫 campus" if ch.campus_only else ""
                     lines.append(
                         f"  {i}. [bold]{ch.name}[/bold] — "
-                        f"{ch.user_count}/{ch.max_users} — {vis} "
+                        f"{ch.user_count}/{ch.max_users} — {vis}{campus} "
                         f"({ch.host_ip}:{ch.host_port})"
                     )
                 log.write("\n".join(lines))
@@ -726,23 +769,26 @@ class FtMsgApp(App[None]):
             return
 
         if cmd == "/create":
-            parts = content.split(" ", 3)
-            if len(parts) < 3:
-                log.write(f"[red][{now}] usage: /create <nom> <max> [password][/red]")
+            tokens = content.split()
+            campus_only = "campus" in tokens
+            filtered = [t for t in tokens if t != "campus"]
+            if len(filtered) < 3:
+                log.write(f"[red][{now}] usage: /create <nom> <max> [password] [campus][/red]")
                 event.input.value = ""
                 return
-            name = parts[1]
+            name = filtered[1]
             try:
-                max_users = int(parts[2])
+                max_users = int(filtered[2])
             except ValueError:
                 log.write(f"[red][{now}] max doit être un nombre[/red]")
                 event.input.value = ""
                 return
-            password = parts[3] if len(parts) > 3 else ""
+            password = " ".join(filtered[3:]) if len(filtered) > 3 else ""
             is_public = (password == "")
-            status = await self.client.create_channel(name, password, max_users, is_public)
+            status = await self.client.create_channel(name, password, max_users, is_public, campus_only)
+            net_label = "campus" if campus_only else "public" if is_public else "privé"
             if status == "created":
-                log.write(f"[green][{now}] Salon '{name}' créé ![/green]")
+                log.write(f"[green][{now}] Salon '{name}' créé ({net_label}) ![/green]")
             elif status == "already_in_channel":
                 log.write(f"[red][{now}] Déjà dans un salon, quitte-le d'abord[/red]")
             else:

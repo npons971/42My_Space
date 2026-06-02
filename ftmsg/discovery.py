@@ -54,6 +54,7 @@ class DiscoveredChannel:
     user_count: int
     max_users: int
     last_seen: float = 0.0
+    campus_only: bool = False
 
 
 class BroadcastDiscovery:
@@ -138,6 +139,7 @@ class BroadcastDiscovery:
             "is_public": info.is_public,
             "user_count": info.user_count,
             "max_users": info.max_users,
+            "campus_only": info.campus_only,
             "version": 2,
         }, separators=(",", ":"))
 
@@ -234,6 +236,7 @@ class BroadcastDiscovery:
                     user_count=int(msg.get("user_count", 0)),
                     max_users=int(msg.get("max_users", 0)),
                     last_seen=time.time(),
+                    campus_only=bool(msg.get("campus_only", False)),
                 )
 
                 with self._lock:

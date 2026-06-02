@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import re
@@ -38,6 +39,7 @@ class ChannelInfo:
     is_public: bool
     user_count: int
     max_users: int
+    campus_only: bool = False
 
 
 class ChannelServer:
@@ -52,6 +54,8 @@ class ChannelServer:
         on_member_join: Callable[[str], None] | None = None,
         on_member_leave: Callable[[str], None] | None = None,
         on_typing: Callable[[str], None] | None = None,
+        campus_only: bool = False,
+        allowed_network: ipaddress.IPv4Network | None = None,
     ) -> None:
         self.name = name
         self.password = password
@@ -62,6 +66,8 @@ class ChannelServer:
         self.on_member_join = on_member_join
         self.on_member_leave = on_member_leave
         self.on_typing = on_typing
+        self.campus_only = campus_only
+        self.allowed_network = allowed_network
 
         self._clients: dict[str, asyncio.StreamWriter] = {}
         self._member_keys: dict[str, str] = {}
@@ -181,6 +187,7 @@ class ChannelServer:
             is_public=self.is_public,
             user_count=len(self._clients),
             max_users=self.max_users,
+            campus_only=self.campus_only,
         )
 
     def _check_rate_limit(self, login: str) -> bool:
@@ -232,6 +239,19 @@ class ChannelServer:
                     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
             except OSError:
                 pass
+
+        # Campus-only check: reject peers outside the host's subnet
+        if self.campus_only and self.allowed_network is not None:
+            peername = writer.get_extra_info("peername")
+            if peername:
+                peer_ip = peername[0]
+                try:
+                    addr = ipaddress.ip_address(peer_ip)
+                    if addr not in self.allowed_network:
+                        await write_frame(writer, {"type": "JOIN_REJECTED", "reason": "different network (campus-only)"})
+                        return
+                except ValueError:
+                    pass
 
         login: str | None = None
         try:
