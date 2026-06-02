@@ -12,7 +12,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Grid, Horizontal, Vertical, VerticalScroll, ScrollableContainer, Center
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Header, Input, RichLog, Static, TextArea, Label, ListItem, ListView
+from textual.widgets import Button, Header, Input, RichLog, Static, TextArea, Label, ListItem, ListView, OptionList, TabbedContent, TabPane
 from rich.text import Text as RichText
 
 from .client import FTMessageClient, default_login
@@ -61,19 +61,6 @@ def _format_message_text(text: str) -> str:
 class DragHandle(Static):
     """Visual handle between sidebar and chat; click to toggle sidebar."""
 
-    DEFAULT_CSS = """
-    DragHandle {
-        width: 1;
-        height: 1fr;
-        color: $text-muted;
-        background: $surface-darken-2;
-        content-align: center middle;
-    }
-    DragHandle:hover {
-        background: $primary-darken-1;
-        color: $text;
-    }
-    """
 
     def __init__(self, app_ref: FtMsgApp, **kwargs) -> None:
         super().__init__("│", **kwargs)
@@ -110,36 +97,6 @@ class SettingsScreen(ModalScreen):
         ("ctrl+s", "close", "Fermer"),
     ]
 
-    DEFAULT_CSS = """
-    SettingsScreen {
-        align: center middle;
-    }
-    #settings_container {
-        width: 70;
-        height: auto;
-        max-height: 80%;
-        background: $surface;
-        border: solid $primary;
-        padding: 1 2;
-    }
-    .settings-title {
-        text-align: center;
-        text-style: bold;
-        color: $primary;
-        margin-bottom: 1;
-    }
-    .settings-row {
-        margin: 0 1;
-    }
-    #settings_close {
-        width: 100%;
-        margin-top: 1;
-    }
-    #settings_toggle_notif {
-        width: 100%;
-        margin-top: 1;
-    }
-    """
 
     def compose(self) -> ComposeResult:
         with Container(id="settings_container"):
@@ -256,29 +213,6 @@ class SettingsScreen(ModalScreen):
 class CustomFooter(Horizontal):
     """Stylized footer with centered action buttons."""
 
-    DEFAULT_CSS = """
-    CustomFooter {
-        height: auto;
-        dock: bottom;
-        background: $surface-darken-1;
-        border-top: solid $primary-darken-2;
-        padding: 0 1;
-    }
-    CustomFooter Button {
-        margin: 0 1;
-    }
-    #footer_spacer_left, #footer_spacer_right {
-        width: 1fr;
-    }
-    #footer_games {
-        background: $success-darken-1;
-        border: solid $success;
-        color: $text;
-    }
-    #footer_games:hover {
-        background: $success;
-    }
-    """
 
     def compose(self) -> ComposeResult:
         yield Static("", id="footer_spacer_left")
@@ -335,33 +269,6 @@ class CopyScreen(ModalScreen):
         ("ctrl+e", "close", "Fermer"),
     ]
 
-    DEFAULT_CSS = """
-    CopyScreen {
-        align: center middle;
-    }
-    #copy_container {
-        width: 80;
-        height: 90%;
-        background: $surface;
-        border: solid $primary;
-        padding: 1 2;
-    }
-    .copy-title {
-        text-align: center;
-        text-style: bold;
-        color: $primary;
-        margin-bottom: 1;
-    }
-    #copy_area {
-        width: 100%;
-        height: 1fr;
-        border: solid $surface-darken-2;
-    }
-    #copy_buttons {
-        height: auto;
-        margin-top: 1;
-    }
-    """
 
     def __init__(self, app_ref: FtMsgApp, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -412,60 +319,6 @@ class ProfileScreen(ModalScreen):
         ("escape", "close", "Fermer"),
     ]
 
-    DEFAULT_CSS = """
-    ProfileScreen {
-        align: center middle;
-        background: rgba(0, 0, 0, 0.7);
-    }
-    #profile_container {
-        width: 70;
-        height: auto;
-        max-height: 85%;
-        background: $surface;
-        border: double $primary;
-        padding: 1;
-    }
-    .profile-info {
-        height: auto;
-        padding: 1 2;
-        margin-bottom: 1;
-        border: solid $secondary;
-        background: $panel;
-    }
-    .profile-status {
-        text-style: bold;
-        color: $success;
-        margin-bottom: 1;
-    }
-    .profile-bio {
-        color: $text-muted;
-        text-style: italic;
-    }
-    .profile-scores-container {
-        height: auto;
-        max-height: 40%;
-        overflow-y: auto;
-        border: round $accent;
-        padding: 1;
-        background: $panel;
-        margin-bottom: 1;
-    }
-    .game-card {
-        margin-bottom: 1;
-        padding: 0 1;
-    }
-    .game-card-title {
-        text-style: bold;
-        color: $warning;
-    }
-    .game-stat {
-        margin-left: 2;
-        color: $text-muted;
-    }
-    #profile_close {
-        width: 100%;
-    }
-    """
 
     def __init__(self, target_user: str, profile_data: dict[str, Any], **kwargs):
         super().__init__(**kwargs)
@@ -515,82 +368,6 @@ class GameMenuScreen(ModalScreen):
         ("ctrl+g", "close", "Fermer"),
     ]
 
-    DEFAULT_CSS = """
-    GameMenuScreen {
-        align: center middle;
-    }
-    #game_menu_container {
-        width: 72;
-        height: auto;
-        max-height: 90%;
-        background: $surface;
-        border: thick $primary;
-        padding: 1 2;
-    }
-    #game_list_container {
-        height: 1fr;
-        max-height: 20;
-        margin-bottom: 1;
-        overflow-y: auto;
-    }
-    .game-menu-title {
-        text-align: center;
-        text-style: bold;
-        color: $primary;
-        margin-bottom: 0;
-    }
-    .game-menu-subtitle {
-        text-align: center;
-        color: $text-muted;
-        margin-bottom: 1;
-    }
-    .game-category {
-        text-align: left;
-        text-style: bold;
-        color: $secondary;
-        margin: 1 0 0 0;
-        padding: 0 1;
-    }
-    .game-card {
-        layout: horizontal;
-        height: auto;
-        margin: 0 1;
-        padding: 0;
-        border: solid $surface-darken-2;
-        background: $surface-darken-1;
-    }
-    .game-card:hover {
-        border: solid $primary-darken-1;
-    }
-    .game-card-info {
-        width: 1fr;
-        height: auto;
-        padding: 0 1;
-        content-align: left middle;
-    }
-    .game-card-name {
-        text-style: bold;
-        color: $text;
-    }
-    .game-card-desc {
-        color: $text-muted;
-    }
-    .game-card-meta {
-        color: $text-muted;
-        text-style: italic;
-    }
-    .game-card-btn {
-        width: auto;
-        min-width: 12;
-        height: 3;
-        content-align: center middle;
-        margin: 0 1;
-    }
-    #game_menu_close {
-        width: 100%;
-        margin-top: 1;
-    }
-    """
 
     def __init__(self, in_room: bool = False) -> None:
         super().__init__()
@@ -655,35 +432,6 @@ class GameMenuScreen(ModalScreen):
 class GameInviteBanner(Horizontal):
     """Banner shown when a multiplayer game invite is active."""
 
-    DEFAULT_CSS = """
-    GameInviteBanner {
-        height: auto;
-        padding: 0 1;
-        background: $primary-darken-2;
-        color: $text;
-        border-top: solid $primary;
-        border-bottom: solid $primary-darken-2;
-    }
-    GameInviteBanner Static {
-        content-align: center middle;
-        height: auto;
-    }
-    GameInviteBanner Button {
-        margin: 0 1;
-    }
-    #invite_text {
-        width: 1fr;
-        content-align: left middle;
-        padding: 0 1;
-    }
-    #invite_join {
-        background: $success-darken-1;
-        border: solid $success;
-    }
-    #invite_join:hover {
-        background: $success;
-    }
-    """
 
     def __init__(self, app_ref: "FtMsgApp", invite: GameInvite, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -716,36 +464,6 @@ class ChessWidget(Container):
 
     state = reactive(dict)
 
-    DEFAULT_CSS = """
-    ChessWidget {
-        width: 100%;
-        height: auto;
-        align: center middle;
-        content-align: center middle;
-        padding: 1;
-    }
-    #chess_status {
-        width: 100%;
-        text-align: center;
-        margin-bottom: 1;
-    }
-    #chess_grid {
-        grid-size: 8 8;
-        grid-rows: 3;
-        grid-columns: 5;
-        grid-gutter: 0;
-        width: 40;
-        height: auto;
-        content-align: center middle;
-    }
-    #chess_grid Button {
-        width: 5;
-        height: 3;
-        content-align: center middle;
-        text-style: bold;
-        min-width: 5;
-    }
-    """
 
     def __init__(self, app_ref: "FtMsgApp", **kwargs) -> None:
         super().__init__(**kwargs)
@@ -841,45 +559,6 @@ class TicTacToeWidget(Container):
 
     state = reactive(dict)
 
-    DEFAULT_CSS = """
-    TicTacToeWidget {
-        width: 100%;
-        height: auto;
-        align: center middle;
-        content-align: center middle;
-        padding: 1;
-    }
-    #ttt_status {
-        width: 100%;
-        text-align: center;
-        margin-bottom: 1;
-    }
-    #ttt_grid {
-        grid-size: 3 3;
-        grid-rows: 5;
-        grid-columns: 9;
-        grid-gutter: 1;
-        width: 29;
-        height: auto;
-        content-align: center middle;
-    }
-    #ttt_grid Button {
-        width: 9;
-        height: 5;
-        content-align: center middle;
-        text-style: bold;
-    }
-    #ttt_grid Button.x_cell {
-        background: $primary-darken-1;
-        color: $text;
-        border: solid $primary;
-    }
-    #ttt_grid Button.o_cell {
-        background: $error-darken-1;
-        color: $text;
-        border: solid $error;
-    }
-    """
 
     def __init__(self, app_ref: "FtMsgApp", **kwargs) -> None:
         super().__init__(**kwargs)
@@ -970,44 +649,6 @@ class WordRaceWidget(Container):
 
     state = reactive(dict)
 
-    DEFAULT_CSS = """
-    WordRaceWidget {
-        width: 100%;
-        height: auto;
-        align: center middle;
-        content-align: center middle;
-        padding: 1;
-    }
-    #wr_title {
-        text-align: center;
-        text-style: bold;
-        color: $primary;
-        margin-bottom: 0;
-    }
-    #wr_word {
-        text-align: center;
-        text-style: bold;
-        color: $error;
-        height: auto;
-        margin: 1 0;
-    }
-    #wr_round {
-        text-align: center;
-        color: $text-muted;
-        margin-bottom: 0;
-    }
-    #wr_scores {
-        width: auto;
-        height: auto;
-        content-align: center middle;
-        margin: 1 0;
-    }
-    #wr_status {
-        text-align: center;
-        color: $text-muted;
-        margin-top: 1;
-    }
-    """
 
     def __init__(self, app_ref: "FtMsgApp", **kwargs) -> None:
         super().__init__(**kwargs)
@@ -1103,59 +744,6 @@ class GameScreen(ModalScreen):
         ("r", "snake_restart", "Restart"),
     ]
 
-    DEFAULT_CSS = """
-    GameScreen {
-        align: center middle;
-    }
-    #game_container {
-        width: auto;
-        min-width: 60;
-        height: auto;
-        background: $surface;
-        border: thick $primary;
-        padding: 1 2;
-    }
-    #game_header {
-        layout: horizontal;
-        height: auto;
-        margin-bottom: 1;
-        border-bottom: solid $surface-darken-2;
-        padding-bottom: 1;
-    }
-    #game_title {
-        width: 1fr;
-        text-align: left;
-        text-style: bold;
-        color: $primary;
-        content-align: left middle;
-    }
-    #game_status {
-        width: auto;
-        text-align: right;
-        content-align: right middle;
-    }
-    #game_area {
-        width: 100%;
-        height: auto;
-        align: center middle;
-        content-align: center middle;
-        margin: 1 0;
-        border: solid $surface-darken-2;
-        background: $surface-darken-1;
-        padding: 1;
-    }
-    #game_controls {
-        width: 100%;
-        height: auto;
-        content-align: center middle;
-        margin-top: 1;
-        padding-top: 1;
-        border-top: solid $surface-darken-2;
-    }
-    #game_quit {
-        margin: 0 1;
-    }
-    """
 
     def __init__(self, app_ref: "FtMsgApp", game_id: str, invite: GameInvite) -> None:
         super().__init__()
@@ -1263,6 +851,48 @@ class GameScreen(ModalScreen):
             self.app_ref.run_worker(self.app_ref.client.send_game_action(action, {}))
 
 
+
+class ChatTextArea(TextArea):
+    def on_mount(self) -> None:
+        self.text = "Envoyer un message..."
+        self.styles.color = "#888888"
+
+    def on_focus(self, event) -> None:
+        if self.text == "Envoyer un message...":
+            self.text = ""
+            self.styles.color = "white"
+
+    def on_blur(self, event) -> None:
+        if not self.text.strip():
+            self.text = "Envoyer un message..."
+            self.styles.color = "#888888"
+
+    def on_key(self, event) -> None:
+        if self.text == "Envoyer un message...":
+            self.text = ""
+            self.styles.color = "white"
+
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            self.action_submit()
+        elif event.key == "shift+enter":
+            event.prevent_default()
+            event.stop()
+            # Try to insert a newline, fallback to appending if insert is not available
+            if hasattr(self, "insert"):
+                self.insert("\\n")
+            else:
+                self.text = self.text + "\\n"
+                
+    def action_submit(self) -> None:
+        content = self.text
+        if content.strip() and content != "Envoyer un message...":
+            self.app.run_worker(self.app.action_submit_message(content))
+        self.text = ""
+        self.action_cursor_line_start()
+
+
 class FtMsgApp(App[None]):
     TITLE = "42msg"
 
@@ -1276,81 +906,7 @@ class FtMsgApp(App[None]):
 
     sidebar_width = reactive(35)
 
-    CSS = """
-    Screen {
-        layout: vertical;
-        background: $surface;
-    }
-
-    #main_area {
-        layout: horizontal;
-        height: 1fr;
-    }
-
-    #sidebar {
-        width: 35;
-        height: 1fr;
-        border-right: solid $primary-darken-1;
-        padding: 0 1;
-        background: $surface-darken-1;
-        layout: vertical;
-    }
-
-    #resize_handle {
-        width: 1;
-        height: 1fr;
-        background: $surface-darken-2;
-        color: $text-muted;
-        content-align: center middle;
-    }
-
-    #resize_handle:hover {
-        background: $primary-darken-1;
-        color: $text;
-    }
-
-    #chat_area {
-        width: 1fr;
-        height: 1fr;
-        layout: vertical;
-        background: $surface;
-    }
-
-    #chat {
-        height: 1fr;
-        padding: 0 1;
-    }
-
-    #compose {
-        dock: bottom;
-        height: auto;
-        padding: 0 1;
-        background: $surface-darken-1;
-        border-top: solid $primary-darken-2;
-    }
-
-    #suggestions {
-        height: auto;
-        display: none;
-        color: $text-muted;
-        padding: 0 1;
-        background: $surface-darken-1;
-    }
-
-    #status_box {
-        padding: 1 0;
-        border-bottom: solid $primary-darken-2;
-    }
-
-    #channels_box {
-        padding: 1 0;
-        border-bottom: solid $primary-darken-2;
-    }
-
-    #members_box {
-        padding: 1 0;
-    }
-    """
+    CSS_PATH = "style.tcss"
 
     def __init__(self, login: str | None = None) -> None:
         super().__init__()
@@ -1487,17 +1043,20 @@ class FtMsgApp(App[None]):
         with Horizontal(id="main_area"):
             with Container(id="sidebar"):
                 yield Static("Chargement...", id="status_box")
-                yield Static("", id="channels_box")
-                yield Static("", id="members_box")
+                with TabbedContent():
+                    with TabPane("Salons", id="tab_channels"):
+                        yield Static("", id="channels_box")
+                    with TabPane("Membres", id="tab_members"):
+                        yield Static("", id="members_box")
             yield DragHandle(self, id="resize_handle")
             with Container(id="chat_area"):
                 with Container(id="chat"):
                     yield ChatLog(self, id="messages", wrap=True, markup=True, highlight=True)
                 with Container(id="compose"):
-                    yield Static("", id="suggestions")
-                    yield Input(
-                        placeholder="Tape un message ou une commande…",
+                    yield OptionList(id="suggestions_list")
+                    yield ChatTextArea(
                         id="message_input",
+                        show_line_numbers=False,
                     )
         yield CustomFooter()
 
@@ -1508,7 +1067,7 @@ class FtMsgApp(App[None]):
             "[bold]/list[/bold] [bold]/join[/bold] "
             "[bold]/leave[/bold] [bold]/help[/bold]"
         )
-        self.query_one("#message_input", Input).focus()
+        self.query_one("#message_input", ChatTextArea).focus()
         self.client.on_game_invite = self._on_game_invite_received
         self.client.on_game_state_change = self._on_game_state_change
         self.client.on_game_end = self._on_game_end
@@ -1655,9 +1214,9 @@ class FtMsgApp(App[None]):
     # Input handling
     # ------------------------------------------------------------------ #
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        suggestions = self.query_one("#suggestions", Static)
-        val = event.value
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        suggestions = self.query_one("#suggestions_list", OptionList)
+        val = event.text_area.text
 
         if val and not val.startswith("/"):
             if self.client.current_channel_name():
@@ -1666,26 +1225,34 @@ class FtMsgApp(App[None]):
         if val.startswith("/"):
             matches = [c for c in _COMMANDS if c.startswith(val)]
             if matches:
-                suggestions.update("Suggestions: " + "  ".join(matches))
+                suggestions.clear_options()
+                suggestions.add_options(matches)
                 suggestions.styles.display = "block"
                 return
         suggestions.styles.display = "none"
 
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        inp = self.query_one("#message_input", ChatTextArea)
+        inp.text = str(event.option.prompt)
+        inp.action_cursor_line_end()
+        inp.focus()
+        self.query_one("#suggestions_list", OptionList).styles.display = "none"
+
     def on_key(self, event) -> None:
         if event.key == "tab":
-            inp = self.query_one("#message_input", Input)
-            val = inp.value
+            inp = self.query_one("#message_input", ChatTextArea)
+            val = inp.text
             if val.startswith("/"):
                 matches = [c for c in _COMMANDS if c.startswith(val)]
                 if matches:
-                    inp.value = matches[0]
-                    inp.cursor_position = len(inp.value)
+                    inp.text = matches[0]
+                    inp.action_cursor_line_end()
                     event.stop()
                     event.prevent_default()
-            self.query_one("#suggestions", Static).styles.display = "none"
+            self.query_one("#suggestions_list", OptionList).styles.display = "none"
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        content = event.value.strip()
+    async def action_submit_message(self, content: str) -> None:
+        content = content.strip()
         if not content:
             return
 
@@ -1723,12 +1290,12 @@ class FtMsgApp(App[None]):
         "  [bold]/quit[/bold]                                    — quitter\n"
         "  Tape un message puis Entrée pour l'envoyer dans le salon.",
             )
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/settings":
             self.action_toggle_settings()
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/list":
@@ -1746,14 +1313,14 @@ class FtMsgApp(App[None]):
                         f"({ch.host_ip}:{ch.host_port})"
                     )
                 log.write("\n".join(lines))
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/join":
             parts = content.split(" ")
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /join <nom|ip> [port] [password] ou /join <index> [password][/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
 
             if parts[1].isdigit() and len(parts[1]) < 4:
@@ -1762,7 +1329,7 @@ class FtMsgApp(App[None]):
                 channels = self.client.list_channels()
                 if idx < 0 or idx >= len(channels):
                     log.write(f"[red][{now}] Index invalide[/red]")
-                    event.input.value = ""
+                    # event.input.value = ""
                     return
                 ch = channels[idx]
                 status, detail = await self.client.join_channel(ch.host_ip if ch.host_ip != "relay" else ch.name, ch.host_port, password)
@@ -1776,14 +1343,14 @@ class FtMsgApp(App[None]):
                     # Mode direct: /join <ip> <port> [password]
                     if len(parts) < 3:
                         log.write(f"[red][{now}] usage: /join <ip> <port> [password][/red]")
-                        event.input.value = ""
+                        # event.input.value = ""
                         return
                     host_ip = parts[1]
                     try:
                         host_port = int(parts[2])
                     except ValueError:
                         log.write(f"[red][{now}] port invalide[/red]")
-                        event.input.value = ""
+                        # event.input.value = ""
                         return
                     password = parts[3] if len(parts) > 3 else ""
                     status, detail = await self.client.join_channel(host_ip, host_port, password)
@@ -1798,12 +1365,12 @@ class FtMsgApp(App[None]):
                 log.write(f"[red][{now}] Déjà dans un salon[/red]")
             else:
                 log.write(f"[red][{now}] Échec: {status} ({detail})[/red]")
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/leave":
             await self.client.leave_channel()
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/peers":
@@ -1817,7 +1384,7 @@ class FtMsgApp(App[None]):
                     f"[magenta][{now}] Salon '{cname}' — "
                     f"{len(members)} membre(s):[/magenta] {summary}",
                 )
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/kick":
@@ -1833,7 +1400,7 @@ class FtMsgApp(App[None]):
                     log.write(f"[red][{now}] Tu n'es pas l'hôte[/red]")
                 else:
                     log.write(f"[red][{now}] {target} non trouvé[/red]")
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/ban":
@@ -1849,7 +1416,7 @@ class FtMsgApp(App[None]):
                     log.write(f"[red][{now}] Tu n'es pas l'hôte[/red]")
                 else:
                     log.write(f"[red][{now}] {target} non trouvé[/red]")
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/msg":
@@ -1868,12 +1435,12 @@ class FtMsgApp(App[None]):
                     log.write(f"[red][{now}] {target} n'est pas dans le salon[/red]")
                 else:
                     log.write(f"[red][{now}] Envoi MP échoué[/red]")
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/games":
             self.action_toggle_games()
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/game_start":
@@ -1881,20 +1448,20 @@ class FtMsgApp(App[None]):
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /game_start <game_id>[/red]")
                 log.write(f"[dim]Disponibles: snake, tictactoe, wordrace, chess[/dim]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             await self._do_start_game(parts[1])
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/game_join":
             parts = content.split()
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /game_join <invite_id>[/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             await self._do_join_game(parts[1])
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/game_leave":
@@ -1902,14 +1469,14 @@ class FtMsgApp(App[None]):
             if self._game_screen:
                 self.pop_screen()
                 self._game_screen = None
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/game_action":
             parts = content.split()
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /game_action <action> [args...][/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             action = parts[1]
             data = {}
@@ -1926,7 +1493,7 @@ class FtMsgApp(App[None]):
                 if len(parts) >= 3:
                     data = {"letter": parts[2]}
             await self.client.send_game_action(action, data)
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/profile":
@@ -1934,19 +1501,19 @@ class FtMsgApp(App[None]):
             if len(parts) >= 3 and parts[1] == "bio":
                 self.client.profile.update_profile(bio=parts[2])
                 log.write(f"[green][{now}] Bio mise à jour.[/green]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             elif len(parts) >= 3 and parts[1] == "status":
                 self.client.profile.update_profile(status=parts[2])
                 log.write(f"[green][{now}] Statut mis à jour.[/green]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
 
             target_user = parts[1] if len(parts) > 1 else self.client.login
             
             if target_user != self.client.login and not self.client.current_channel_name():
                 log.write(f"[red][{now}] Tu dois être dans un salon pour voir le profil des autres joueurs.[/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
                 
             profile_data = await self.client.profile_request(target_user)
@@ -1955,7 +1522,7 @@ class FtMsgApp(App[None]):
             else:
                 self.push_screen(ProfileScreen(target_user, profile_data))
                 
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/score":
@@ -1974,41 +1541,41 @@ class FtMsgApp(App[None]):
                     idx = int(parts[1])
                 except ValueError:
                     log.write(f"[red][{now}] usage: /score list | /score <index>[/red]")
-                    event.input.value = ""
+                    # event.input.value = ""
                     return
                 games = await self.client.score_list()
                 if idx < 0 or idx >= len(games):
                     log.write(f"[red][{now}] Index invalide[/red]")
-                    event.input.value = ""
+                    # event.input.value = ""
                     return
                 game_id = games[idx][1]
                 text = await self.client.score_share(game_id)
                 status = await self.client.send_channel_message(text)
                 if status != "sent":
                     log.write(f"[red][{now}] Impossible d'envoyer le score ({status})[/red]")
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/leaderboard":
             if not self.client.current_channel_name():
                 log.write(f"[red][{now}] Tu n'es dans aucun salon[/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             parts = content.split()
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /leaderboard <index>[/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             try:
                 idx = int(parts[1])
             except ValueError:
                 log.write(f"[red][{now}] usage: /leaderboard <index>[/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             games = await self.client.score_list()
             if idx < 0 or idx >= len(games):
                 log.write(f"[red][{now}] Index invalide[/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             game_id = games[idx][1]
             log.write(f"[cyan][{now}] Demande de classement pour {game_id}...[/cyan]")
@@ -2037,7 +1604,7 @@ class FtMsgApp(App[None]):
                     score_str = ", ".join(score_parts) if score_parts else "—"
                     lines.append(f"  [bold]{rank}.[/bold] {player:12}  {score_str}")
             log.write("\n".join(lines))
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd == "/create":
@@ -2049,14 +1616,14 @@ class FtMsgApp(App[None]):
                 filtered = tokens[:-1]
             if len(filtered) < 3:
                 log.write(f"[red][{now}] usage: /create <nom> <max> [password] [1|0][/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             name = filtered[1]
             try:
                 max_users = int(filtered[2])
             except ValueError:
                 log.write(f"[red][{now}] max doit être un nombre[/red]")
-                event.input.value = ""
+                # event.input.value = ""
                 return
             password = " ".join(filtered[3:]) if len(filtered) > 3 else ""
             is_public = (password == "")
@@ -2068,12 +1635,12 @@ class FtMsgApp(App[None]):
                 log.write(f"[red][{now}] Déjà dans un salon, quitte-le d'abord[/red]")
             else:
                 log.write(f"[red][{now}] Échec création: {status}[/red]")
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         if cmd.startswith("/"):
             log.write(f"[red][{now}] Commande inconnue: {cmd}[/red]")
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         cname = self.client.current_channel_name()
@@ -2082,7 +1649,7 @@ class FtMsgApp(App[None]):
                 f"[red][{now}][/red] Tu n'es dans aucun salon. "
                 "Utilise [bold]/create[/bold] ou [bold]/join[/bold].",
             )
-            event.input.value = ""
+            # event.input.value = ""
             return
 
         status = await self.client.send_channel_message(content)
@@ -2094,7 +1661,7 @@ class FtMsgApp(App[None]):
             log.write(f"[yellow][{now}] Doucement ! Tu envoies des messages trop vite.[/yellow]")
         else:
             log.write(f"[red][{now}] Envoi impossible ({status})[/red]")
-        event.input.value = ""
+        # event.input.value = ""
 
 
 def run_tui(login: str | None = None) -> None:
