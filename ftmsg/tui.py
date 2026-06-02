@@ -261,12 +261,21 @@ class CustomFooter(Horizontal):
     #footer_spacer_left, #footer_spacer_right {
         width: 1fr;
     }
+    #footer_games {
+        background: $success-darken-1;
+        border: solid $success;
+        color: $text;
+    }
+    #footer_games:hover {
+        background: $success;
+    }
     """
 
     def compose(self) -> ComposeResult:
         yield Static("", id="footer_spacer_left")
         yield Button("Quitter [dim]Ctrl+Q[/dim]", id="footer_quit", variant="error")
         yield Button("Sidebar [dim]Ctrl+B[/dim]", id="footer_sidebar", variant="primary")
+        yield Button("Jeux [dim]Ctrl+G[/dim]", id="footer_games", variant="success")
         yield Button("Paramètres [dim]Ctrl+S[/dim]", id="footer_settings", variant="default")
         yield Static("", id="footer_spacer_right")
 
@@ -277,6 +286,8 @@ class CustomFooter(Horizontal):
             app.exit()
         elif event.button.id == "footer_sidebar":
             app.action_toggle_sidebar()
+        elif event.button.id == "footer_games":
+            app.action_toggle_games()
         elif event.button.id == "footer_settings":
             app.action_toggle_settings()
 
