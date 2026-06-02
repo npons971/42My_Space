@@ -43,6 +43,7 @@ python3 -m venv .venv
 mkdir -p ~/.local/bin
 cat > ~/.local/bin/42msg <<'EOF'
 #!/usr/bin/env bash
+cd "$HOME/.local/share/42msg" || exit 1
 exec "$HOME/.local/share/42msg/.venv/bin/python" -m ftmsg "$@"
 EOF
 chmod +x ~/.local/bin/42msg

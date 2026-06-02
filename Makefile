@@ -14,12 +14,10 @@ install: venv
 	@echo "[42msg] Installation des dépendances dans le venv..."
 	@$(PIP) install --no-user -r $(PROJECT_DIR)/requirements.txt
 	@echo "[42msg] Configuration de l'alias..."
-	@if ! grep -Fq "alias 42msg=" $(HOME)/.zshrc 2>/dev/null; then \
-		echo "alias 42msg='cd $(PROJECT_DIR) && $(PYTHON) -m ftmsg --relay wss://four2my-space.onrender.com'" >> $(HOME)/.zshrc; \
-		echo "[42msg] Alias ajouté dans $(HOME)/.zshrc"; \
-	else \
-		echo "[42msg] Alias 42msg déjà présent dans $(HOME)/.zshrc"; \
-	fi
+	@# Supprime l'ancien alias s'il existe (pour éviter les doublons ou les anciennes versions)
+	@sed -i '/alias 42msg=/d' $(HOME)/.zshrc 2>/dev/null || true
+	@echo "alias 42msg='PYTHONPATH=$(PROJECT_DIR) $(PYTHON) -m ftmsg --relay wss://four2my-space.onrender.com'" >> $(HOME)/.zshrc
+	@echo "[42msg] Alias ajouté dans $(HOME)/.zshrc"
 
 relay: venv
 	@echo "[42msg] Lancement du relais local..."

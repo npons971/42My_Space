@@ -1233,7 +1233,7 @@ class FtMsgApp(App[None]):
     def on_mount(self) -> None:
         self.query_one("#messages", ChatLog).write(
             "[bold green]42msg prêt[/bold green] — "
-            "[bold]/create[/bold] [italic]nom max password campus[/italic] "
+            "[bold]/create[/bold] [italic]nom max password [1|0][/italic] "
             "[bold]/list[/bold] [bold]/join[/bold] "
             "[bold]/leave[/bold] [bold]/help[/bold]"
         )
@@ -1431,18 +1431,18 @@ class FtMsgApp(App[None]):
         if cmd == "/help":
             log.write(
                 "[bold magenta]Commandes:[/bold magenta]\n"
-        "  [bold]/create <nom> <max> [password] [campus][/bold]  — créer un salon\n"
-        "  [bold]/list[/bold]                          — lister les salons\n"
-        "  [bold]/join <ip> <port> <password>[/bold]   — rejoindre un salon\n"
-        "  [bold]/join <index> <password>[/bold]       — rejoindre depuis /list\n"
-        "  [bold]/leave[/bold]                         — quitter le salon\n"
-        "  [bold]/peers[/bold]                         — membres du salon\n"
-        "  [bold]/msg <login> <text>[/bold]            — message privé\n"
-        "  [bold]/kick <login>[/bold]                  — expulser (hôte)\n"
-        "  [bold]/ban <login>[/bold]                   — bannir (hôte)\n"
-        "  [bold]/settings[/bold]                       — paramètres\n"
-        "  [bold]/help[/bold]                          — cette aide\n"
-        "  [bold]/quit[/bold]                          — quitter\n"
+        "  [bold]/create <nom> <max> [password] [1|0][/bold]     — créer un salon\n"
+        "  [bold]/list[/bold]                                    — lister les salons\n"
+        "  [bold]/join <ip> <port> <password>[/bold]             — rejoindre un salon\n"
+        "  [bold]/join <index> <password>[/bold]                 — rejoindre depuis /list\n"
+        "  [bold]/leave[/bold]                                   — quitter le salon\n"
+        "  [bold]/peers[/bold]                                   — membres du salon\n"
+        "  [bold]/msg <login> <text>[/bold]                      — message privé\n"
+        "  [bold]/kick <login>[/bold]                            — expulser (hôte)\n"
+        "  [bold]/ban <login>[/bold]                             — bannir (hôte)\n"
+        "  [bold]/settings[/bold]                                — paramètres\n"
+        "  [bold]/help[/bold]                                    — cette aide\n"
+        "  [bold]/quit[/bold]                                    — quitter\n"
         "  Tape un message puis Entrée pour l'envoyer dans le salon.",
             )
             event.input.value = ""
@@ -1647,10 +1647,13 @@ class FtMsgApp(App[None]):
 
         if cmd == "/create":
             tokens = content.split()
-            campus_only = "campus" in tokens
-            filtered = [t for t in tokens if t != "campus"]
+            campus_only = False
+            filtered = tokens[:]
+            if tokens and tokens[-1] in ("0", "1"):
+                campus_only = (tokens[-1] == "1")
+                filtered = tokens[:-1]
             if len(filtered) < 3:
-                log.write(f"[red][{now}] usage: /create <nom> <max> [password] [campus][/red]")
+                log.write(f"[red][{now}] usage: /create <nom> <max> [password] [1|0][/red]")
                 event.input.value = ""
                 return
             name = filtered[1]

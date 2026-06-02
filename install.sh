@@ -42,9 +42,29 @@ if [ ! -x "${VENV_DIR}/bin/pip" ]; then
     exit 1
 fi
 
+log_info "Mise à jour de pip..."
+if ! "${VENV_DIR}/bin/pip" install --upgrade pip >/dev/null 2>&1; then
+    log_error "Échec de la mise à jour de pip."
+    exit 1
+fi
+
 log_info "Installation des dépendances..."
-"${VENV_DIR}/bin/pip" install --quiet --upgrade pip
-"${VENV_DIR}/bin/pip" install --quiet -r requirements.txt
+if ! "${VENV_DIR}/bin/pip" install -r requirements.txt; then
+    log_error "Échec de l'installation des dépendances."
+    log_error "Si l'erreur concerne pynacl, installe les paquets système:"
+    log_error "  sudo apt-get install python3-dev libffi-dev libsodium-dev build-essential"
+    exit 1
+fi
+
+log_info "Vérification de l'installation..."
+if ! "${PYTHON}" -c "import ftmsg; import textual; import nacl; print('OK')" 2>/dev/null; then
+    log_error "Les dépendances ne sont pas correctement installées dans le venv."
+    log_error "Tentative de réinstallation forcée..."
+    "${VENV_DIR}/bin/pip" install --force-reinstall -r requirements.txt || {
+        log_error "Réinstallation forcée échouée aussi."
+        exit 1
+    }
+fi
 
 log_info "Création du wrapper ${WRAPPER}..."
 mkdir -p "${BIN_DIR}"
@@ -57,6 +77,7 @@ if [ ! -x "${PYTHON}" ]; then
     echo "[42msg] Venv introuvable. Relance l'installation." >&2
     exit 1
 fi
+cd "${INSTALL_DIR}" || exit 1
 exec "${PYTHON}" -m ftmsg "$@"
 EOF
 chmod +x "${WRAPPER}"
