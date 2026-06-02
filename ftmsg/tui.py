@@ -1682,6 +1682,10 @@ class FtMsgApp(App[None]):
             return
 
         if cmd == "/leaderboard":
+            if not self.client.current_channel_name():
+                log.write(f"[red][{now}] Tu n'es dans aucun salon[/red]")
+                event.input.value = ""
+                return
             parts = content.split()
             if len(parts) < 2:
                 log.write(f"[red][{now}] usage: /leaderboard <index>[/red]")
