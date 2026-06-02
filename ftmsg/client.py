@@ -53,6 +53,7 @@ class FTMessageClient:
         self.channel_client: ChannelClient | None = None
         self.ws: Any | None = None
         self._relay_task: asyncio.Task | None = None
+        self._relay_keepalive_task: asyncio.Task | None = None
         self._relay_channels: list[DiscoveredChannel] = []
         self._relay_current_channel: str | None = None
         self._relay_members: list[str] = []
@@ -104,12 +105,20 @@ class FTMessageClient:
 
     async def stop(self) -> None:
         await self.leave_channel()
+        if self._relay_keepalive_task:
+            self._relay_keepalive_task.cancel()
+            try:
+                await self._relay_keepalive_task
+            except asyncio.CancelledError:
+                pass
+            self._relay_keepalive_task = None
         if self._relay_task:
             self._relay_task.cancel()
             try:
                 await self._relay_task
             except asyncio.CancelledError:
                 pass
+            self._relay_task = None
         if self.ws:
             await self.ws.close()
             self.ws = None
@@ -127,7 +136,7 @@ class FTMessageClient:
         max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
-                self.ws = await websockets.connect(self.relay_url)
+                self.ws = await websockets.connect(self.relay_url, ping_interval=25, ping_timeout=25)
                 await self.ws.send(json.dumps({"type": "REGISTER", "login": self.login}))
                 raw = await self.ws.recv()
                 resp = json.loads(raw)
@@ -286,10 +295,37 @@ class FTMessageClient:
                     if self._pending_join and not self._pending_join.done():
                         self._pending_join.set_result(("error", reason))
 
+        except asyncio.CancelledError:
+            # Task cancelled by stop() — don't reconnect
+            raise
         except Exception as e:
-            await self.events_queue.put(f"⚠️ Déconnecté du relais: {e}")
+            msg = str(e)
+            # ConnectionClosed without close frame is common on idle/free-tier hosts
+            if "no close frame" in msg.lower() or "connection closed" in msg.lower():
+                await self.events_queue.put("Relais déconnecté (temps d'inactivité). Reconnexion...")
+            else:
+                await self.events_queue.put(f"⚠️ Déconnecté du relais: {e}")
+            # auto-reconnect
+            if getattr(self, "relay_url", None) and self._loop:
+                ws = self.ws
+                self.ws = None
+                if ws:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                await asyncio.sleep(5)
+                if getattr(self, "relay_url", None):
+                    await self._connect_relay()
+                return
         finally:
+            ws = self.ws
             self.ws = None
+            if ws:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
 
     def _resolve_local_ip(self) -> str:
         if self.local_ip:
