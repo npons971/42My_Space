@@ -15,10 +15,11 @@ def main() -> None:
     parser.add_argument("--password", default="", help="Mot de passe pour --host")
     parser.add_argument("--join", metavar="IP:PORT", help="Rejoindre un salon et quitter (mode headless)")
     parser.add_argument("--join-password", default="", dest="join_password", help="Mot de passe pour --join")
-    parser.add_argument("--relay", metavar="URL", help="URL du serveur relais WebSocket (ex: wss://relay.render.com)")
+    parser.add_argument("--relay", metavar="URL", default="wss://four2my-space.onrender.com", help="URL du serveur relais WebSocket (ex: wss://relay.render.com)")
+    parser.add_argument("--no-relay", action="store_true", help="Force le mode P2P local (sans relais WebSocket)")
     args = parser.parse_args()
 
-    if args.relay:
+    if args.relay and not args.no_relay:
         import os
         os.environ["FTMSG_RELAY_URL"] = args.relay
 

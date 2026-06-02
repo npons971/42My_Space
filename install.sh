@@ -78,7 +78,7 @@ if [ ! -x "${PYTHON}" ]; then
     exit 1
 fi
 cd "${INSTALL_DIR}" || exit 1
-exec "${PYTHON}" -m ftmsg "$@"
+exec "${PYTHON}" -m ftmsg --relay wss://four2my-space.onrender.com "$@"
 EOF
 chmod +x "${WRAPPER}"
 
