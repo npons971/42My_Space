@@ -323,6 +323,12 @@ class FTMessageClient:
                     await self._connect_relay()
                 return
         finally:
+            self.is_hosting = False
+            self.room_key = None
+            self._relay_current_channel = None
+            self._relay_members = []
+            self._relay_member_keys.clear()
+
             ws = self.ws
             self.ws = None
             if ws:
