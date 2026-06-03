@@ -40,11 +40,17 @@ def main() -> None:
     parser.add_argument("--join-password", default="", dest="join_password", help="Mot de passe pour --join")
     parser.add_argument("--relay", metavar="URL", default="wss://four2my-space.onrender.com", help="URL du serveur relais WebSocket (ex: wss://relay.render.com)")
     parser.add_argument("--no-relay", action="store_true", help="Force le mode P2P local (sans relais WebSocket)")
+    parser.add_argument("--login", metavar="LOGIN", help="Pseudo à utiliser (défaut: $USER)")
+    parser.add_argument("--data-dir", metavar="DIR", help="Dossier de données (défaut: ~/.42msg)")
     args = parser.parse_args()
 
     if args.relay and not args.no_relay:
         import os
         os.environ["FTMSG_RELAY_URL"] = args.relay
+
+    if args.data_dir:
+        import os
+        os.environ["FTMSG_DATA_DIR"] = args.data_dir
 
     if args.debug:
         logging.basicConfig(
@@ -57,11 +63,11 @@ def main() -> None:
     elif args.join:
         asyncio.run(_run_headless_join(args))
     else:
-        run_tui()
+        run_tui(login=args.login)
 
 
 async def _run_headless_host(args) -> None:
-    login = args.host
+    login = args.login or args.host
     client = FTMessageClient(login)
     await client.start()
     is_public = (args.password == "")
@@ -84,7 +90,7 @@ async def _run_headless_join(args) -> None:
         print("Format: IP:PORT", file=sys.stderr)
         sys.exit(1)
     host_ip, host_port = parts[0], int(parts[1])
-    login = "guest"
+    login = args.login or "guest"
     client = FTMessageClient(login)
     await client.start()
     status, detail = await client.join_channel(host_ip, host_port, args.join_password)

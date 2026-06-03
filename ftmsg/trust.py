@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +19,7 @@ class TrustedIdentity:
 
 class TrustStore:
     def __init__(self, db_path: Path | None = None) -> None:
-        default_path = Path.home() / ".42msg" / "messages.db"
+        default_path = Path(os.environ.get("FTMSG_DATA_DIR", Path.home() / ".42msg")) / "messages.db"
         self.db_path = db_path or default_path
 
     async def init(self) -> None:

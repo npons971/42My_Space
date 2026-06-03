@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 from typing import Union
 
@@ -14,7 +15,7 @@ KeyLike = Union[bytes, str, PublicKey, PrivateKey]
 
 
 def get_default_key_paths(base_dir: Path | None = None) -> tuple[Path, Path]:
-    root = base_dir or (Path.home() / ".42msg" / "keys")
+    root = base_dir or Path(os.environ.get("FTMSG_DATA_DIR", Path.home() / ".42msg")) / "keys"
     return root / "enc_private.key", root / "enc_public.key"
 
 

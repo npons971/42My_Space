@@ -31,7 +31,9 @@ from .trust import TrustStore
 class FTMessageClient:
     def __init__(self, login: str, db_path: Path | None = None) -> None:
         self.login = login
-        self.db_path = db_path or (Path.home() / ".42msg" / "messages.db")
+        data_dir = Path(os.environ.get("FTMSG_DATA_DIR", Path.home() / ".42msg"))
+        data_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = db_path or (data_dir / "messages.db")
 
         (
             self.enc_private_key,
@@ -770,7 +772,7 @@ class FTMessageClient:
         if game_id == "snake":
             score = score_dict.get("score", 0)
             self.profile.record_score("snake", {"score": score, "best_score": score, "games_played": 1})
-        elif game_id in ["tictactoe", "chess", "connectfour", "reversi", "battleship", "hangman", "minesweeper"]:
+        elif game_id in ["tictactoe", "chess", "connectfour", "battleship", "hangman"]:
             winner = score_dict.get("winner")
             draw = score_dict.get("draw", False)
             players = score_dict.get("players", [])
@@ -794,7 +796,7 @@ class FTMessageClient:
         if not invite:
             return
         game_id = invite.game_id
-        if game_id in ["tictactoe", "chess", "connectfour", "reversi", "battleship", "hangman", "minesweeper"]:
+        if game_id in ["tictactoe", "chess", "connectfour", "battleship", "hangman"]:
             players = final_state.get("players", invite.players)
             draw = False
             if game_id == "tictactoe":

@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 
 
-PROFILE_DIR = Path.home() / ".42msg"
-PROFILE_PATH = PROFILE_DIR / "profile.json"
+_DATA_DIR = Path(os.environ.get("FTMSG_DATA_DIR", Path.home() / ".42msg"))
+PROFILE_DIR = _DATA_DIR
+PROFILE_PATH = _DATA_DIR / "profile.json"
 
 
 def _load_json() -> dict[str, Any]:

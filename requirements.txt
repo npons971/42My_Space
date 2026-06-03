@@ -4,3 +4,4 @@ textual
 pytest
 websockets
 chess
+textual-canvas

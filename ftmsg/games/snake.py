@@ -4,9 +4,9 @@ import random
 from typing import Any, Callable
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal
+from textual.containers import Container
 from textual.reactive import reactive
-from textual.widgets import Button, Static
+from textual.widgets import Static
 
 from .base import BaseGame, BaseGameSession, GameInvite, register_game
 
@@ -14,8 +14,12 @@ from .base import BaseGame, BaseGameSession, GameInvite, register_game
 class SnakeSession(BaseGameSession):
     """A solo snake game session rendered as a grid."""
 
-    GRID_W = 20
-    GRID_H = 12
+    GRID_W = 40
+    GRID_H = 24
+
+    PHASE_STARTING = 0
+    PHASE_PLAYING = 1
+    PHASE_GAME_OVER = 2
 
     def __init__(
         self, invite: GameInvite,
@@ -23,12 +27,13 @@ class SnakeSession(BaseGameSession):
         on_score: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         super().__init__(invite, on_state_change, on_score)
-        self.snake: list[tuple[int, int]] = [(5, 5), (4, 5), (3, 5)]
+        self.phase = self.PHASE_STARTING
+        self.start_timer = 30  # 30 ticks for countdown
+        self.snake: list[tuple[int, int]] = [(10, 12), (9, 12), (8, 12), (7, 12)]
         self.direction: tuple[int, int] = (1, 0)
         self.move_queue: list[tuple[int, int]] = []
         self.food = self._spawn_food()
         self.score = 0
-        self.game_over = False
         self.tick_count = 0
         self._update_state()
 
@@ -46,25 +51,29 @@ class SnakeSession(BaseGameSession):
             "snake": self.snake,
             "food": self.food,
             "score": self.score,
-            "game_over": self.game_over,
+            "phase": self.phase,
+            "start_timer": self.start_timer,
             "tick": self.tick_count,
         }
 
     def handle_action(self, player: str, action: str, data: dict[str, Any]) -> None:
-        if action == "restart" and self.game_over:
-            self.snake = [(self.GRID_W // 2, self.GRID_H // 2)]
+        if action == "restart" and self.phase == self.PHASE_GAME_OVER:
+            self.phase = self.PHASE_STARTING
+            self.start_timer = 30
+            self.snake = [(10, 12), (9, 12), (8, 12), (7, 12)]
             self.direction = (1, 0)
             self.move_queue = []
             self.food = self._spawn_food()
             self.score = 0
-            self.game_over = False
             self.is_active = True
             self.winner = None
             self._update_state()
             self.broadcast_state()
             return
-        if self.game_over:
+
+        if self.phase != self.PHASE_PLAYING:
             return
+
         # Actions: up, down, left, right
         dirs = {
             "up": (0, -1),
@@ -81,30 +90,40 @@ class SnakeSession(BaseGameSession):
                     self.move_queue.append(nd)
 
     def tick(self) -> None:
-        if self.game_over:
-            return
         self.tick_count += 1
         
+        if self.phase == self.PHASE_STARTING:
+            self.start_timer -= 1
+            if self.start_timer <= 0:
+                self.phase = self.PHASE_PLAYING
+            self._update_state()
+            self.broadcast_state()
+            return
+            
+        if self.phase == self.PHASE_GAME_OVER:
+            return
+
         if self.move_queue:
             self.direction = self.move_queue.pop(0)
             
         head = (self.snake[0][0] + self.direction[0], self.snake[0][1] + self.direction[1])
 
-        # Wrap around map edges (teleport)
+        # Self collision or wall collision (let's do wall collision for extra challenge!)
+        # Wait, previous was wrap around. Let's keep wrap around but smaller pixels.
         head = (head[0] % self.GRID_W, head[1] % self.GRID_H)
 
-        # Self collision
         if head in self.snake:
-            self.game_over = True
+            self.phase = self.PHASE_GAME_OVER
             self.end_game(winner=None)
             self._update_state()
+            self.broadcast_state()
             return
 
         self.snake.insert(0, head)
         if head == self.food:
             self.score += 10
             if len(self.snake) == self.GRID_W * self.GRID_H:
-                self.game_over = True
+                self.phase = self.PHASE_GAME_OVER
                 self.end_game(winner=None)
             else:
                 self.food = self._spawn_food()
@@ -143,92 +162,122 @@ class SnakeGame(BaseGame):
 # --------------------------------------------------------------------------- #
 # UI Widget
 # --------------------------------------------------------------------------- #
-class SnakeWidget(Static):
-    """Textual widget that renders a SnakeSession state with polished visuals.
-
-    Each game cell is drawn as 2 character columns wide to compensate for
-    the fact that terminal cells are roughly 2x taller than they are wide,
-    ensuring the snake moves at the same visual speed in both directions.
-    """
+class SnakeWidget(Container):
+    """Textual widget that renders a SnakeSession state using Canvas."""
 
     state = reactive(dict)
-    CELL_W = 2  # character columns per logical game cell
 
     DEFAULT_CSS = """
     SnakeWidget {
         width: auto;
         height: auto;
         align: center middle;
-        content-align: center middle;
-        color: $text;
+        layout: vertical;
         padding: 1 2;
+    }
+    #snake_canvas {
+        margin: 1 0;
     }
     """
 
+    def compose(self) -> ComposeResult:
+        yield Static("", id="snake_header")
+        from textual_canvas import Canvas
+        yield Canvas(80, 48, id="snake_canvas")
+        yield Static("", id="snake_footer")
+
     def watch_state(self, new_state: dict[str, Any]) -> None:
-        # Fix the widget size explicitly so Textual can centre it correctly
-        gw = new_state.get("grid_w", 20)
-        gh = new_state.get("grid_h", 12)
-        grid_width = gw * self.CELL_W
-        # +2 for left/right borders; +4 horizontal padding (1+1 from CSS + 2 extra)
-        self.styles.width = grid_width + 2 + 4
-        self.styles.height = gh + 6  # borders + header + footer
-        self.update(self._format_state(new_state))
-
-    def _cell(self, char: str, width: int = 0) -> str:
-        """Repeat a char to fill the cell width."""
-        w = width or self.CELL_W
-        return char * w
-
-    def _format_state(self, st: dict[str, Any]) -> str:
-        if not st:
-            return ""
-        gw = st.get("grid_w", 20)
-        gh = st.get("grid_h", 12)
-        snake_raw = st.get("snake", [])
-        snake = [tuple(p) for p in snake_raw]
-        food = tuple(st.get("food", (0, 0)))
-        score = st.get("score", 0)
-        game_over = st.get("game_over", False)
-        head = tuple(snake_raw[0]) if snake_raw else None
-
-        lines: list[str] = []
-        grid_width = gw * self.CELL_W
-
-        # Header
-        header_text = f"S N A K E     Score {score}".center(grid_width)
-        lines.append(f"[bold yellow]{header_text}[/bold yellow]")
-        lines.append("")
-
-        # Top border (simple box-drawing, doubled horizontally)
-        lines.append(f"[dim]┌{self._cell('─', grid_width)}┐[/dim]")
-
-        for y in range(gh):
-            row = "[dim]│[/dim]"
-            for x in range(gw):
-                pos = (x, y)
-                if pos == food:
-                    row += f"[bold red]{self._cell('◉')}[/bold red]"
-                elif pos == head:
-                    row += f"[bold green]{self._cell('▣')}[/bold green]"
-                elif pos in snake:
-                    row += f"[green]{self._cell('█')}[/green]"
-                else:
-                    row += self._cell(" ")
-            row += "[dim]│[/dim]"
-            lines.append(row)
-
-        # Bottom border
-        lines.append(f"[dim]└{self._cell('─', grid_width)}┘[/dim]")
-        lines.append("")
-
-        if game_over:
-            over_text = "G A M E   O V E R".center(grid_width)
-            restart_text = "Appuie sur R pour recommencer".center(grid_width)
-            lines.append(f"[bold red]{over_text}[/bold red]")
-            lines.append(f"[dim]{restart_text}[/dim]")
+        if not new_state:
+            return
+        
+        score = new_state.get("score", 0)
+        phase = new_state.get("phase", 0)
+        
+        self.query_one("#snake_header", Static).update(f"[bold yellow]S N A K E     Score {score}[/bold yellow]")
+        
+        footer = self.query_one("#snake_footer", Static)
+        if phase == 2: # PHASE_GAME_OVER
+            footer.update("[bold red]G A M E   O V E R[/bold red]\n[dim]Appuie sur R pour recommencer[/dim]")
+        elif phase == 0: # PHASE_STARTING
+            footer.update("[dim]Prépare-toi...[/dim]")
         else:
-            hint = "Fleches pour bouger".center(grid_width)
-            lines.append(f"[dim]{hint}[/dim]")
+            footer.update("[dim]Flèches pour bouger[/dim]")
 
-        return "\n".join(lines)
+        from textual_canvas import Canvas
+        from textual.color import Color
+        from .canvas_utils import draw_text
+        
+        canvas = self.query_one("#snake_canvas", Canvas)
+        canvas.clear()
+        
+        snake_raw = new_state.get("snake", [])
+        if not snake_raw:
+            return
+            
+        snake = [tuple(p) for p in snake_raw]
+        food = tuple(new_state.get("food", (0, 0)))
+        head = snake[0]
+
+        # Draw food (2x2 pixel)
+        fx, fy = food
+        canvas.draw_rectangle(fx * 2, fy * 2, 2, 2, Color.parse("red"))
+
+        # Draw snake body with gradient effect
+        # The head is bright lime, the tail is darker green
+        snake_len = len(snake)
+        for i, pos in enumerate(snake):
+            sx, sy = pos
+            if i == 0:
+                color = Color.parse("lime")
+            else:
+                # Calculate a fade factor from 0.0 to 0.7
+                fade = 0.7 * (i / snake_len)
+                color = Color.parse("lime").darken(fade)
+            
+            # Draw connecting segments for a smoother look
+            # Instead of just a 2x2 box, we draw a 2x2 box for each coordinate
+            # We can also draw a line to the next segment to cover gaps if we had any,
+            # but since they move cell by cell, 2x2 boxes are contiguous.
+            canvas.draw_rectangle(sx * 2, sy * 2, 2, 2, color)
+
+        # Draw Overlay (Screens)
+        if phase == 0: # PHASE_STARTING
+            timer = new_state.get("start_timer", 30)
+            # 30 ticks = 3 seconds. Show 3, 2, 1, GO
+            if timer > 20:
+                text = "3"
+            elif timer > 10:
+                text = "2"
+            elif timer > 0:
+                text = "1"
+            else:
+                text = "GO"
+            
+            # Center the text approximately (each letter is ~4px wide, 5px high)
+            text_w = len(text) * 4
+            text_x = (80 - text_w) // 2
+            text_y = (48 - 5) // 2
+            
+            # Draw background box for text to make it readable
+            canvas.draw_rectangle(text_x - 4, text_y - 4, text_w + 6, 13, Color.parse("black").with_alpha(0.8))
+            draw_text(canvas, text_x, text_y, text, Color.parse("white"))
+
+        elif phase == 2: # PHASE_GAME_OVER
+            text1 = "GAME"
+            text2 = "OVER"
+            
+            w1 = len(text1) * 4
+            w2 = len(text2) * 4
+            
+            x1 = (80 - w1) // 2
+            x2 = (80 - w2) // 2
+            
+            y1 = (48 - 15) // 2
+            y2 = y1 + 7
+            
+            # Darken the whole screen
+            for y in range(48):
+                canvas.draw_line(0, y, 79, y, Color.parse("black").with_alpha(0.5))
+                
+            draw_text(canvas, x1, y1, text1, Color.parse("red"))
+            draw_text(canvas, x2, y2, text2, Color.parse("red"))
