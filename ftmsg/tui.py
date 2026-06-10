@@ -25,6 +25,7 @@ from .games.connectfour import ConnectFourGame
 
 from .games.battleship import BattleshipGame
 from .games.hangman import HangmanGame
+from .games.twenty48 import Twenty48Game, Twenty48Widget
 
 from .games.widgets import ConnectFourWidget, BattleshipWidget, HangmanWidget
 
@@ -794,6 +795,9 @@ class GameScreen(ModalScreen):
                 if self.game_id == "snake":
                     self._game_widget = SnakeWidget(id="game_widget")
                     yield self._game_widget
+                elif self.game_id == "twenty48":
+                    self._game_widget = Twenty48Widget(id="game_widget")
+                    yield self._game_widget
                 elif self.game_id == "tictactoe":
                     self._game_widget = TicTacToeWidget(self.app_ref, id="game_widget")
                     yield self._game_widget
@@ -875,7 +879,7 @@ class GameScreen(ModalScreen):
         self._send_snake_action("restart")
 
     def _send_snake_action(self, action: str) -> None:
-        if self.game_id == "snake" and self.app_ref.client.current_game_session:
+        if self.game_id in ("snake", "twenty48") and self.app_ref.client.current_game_session:
             self.app_ref.run_worker(self.app_ref.client.send_game_action(action, {}))
 
 
@@ -1615,11 +1619,19 @@ class FtMsgApp(App[None]):
                 lines.append("  Aucune réponse.")
             else:
                 # Build a table: each row is a player, each column a metric
+                from .games.base import get_game
+                g = get_game(game_id)
+                schema = g.score_schema if g else {}
+
                 all_keys: set[str] = set()
                 for scores in responses.values():
                     all_keys.update(scores.keys())
-                # Filter out non-numeric keys for sorting
-                numeric_keys = [k for k in sorted(all_keys) if any(isinstance(scores.get(k), (int, float)) for scores in responses.values())]
+                
+                if schema:
+                    numeric_keys = [k for k in schema.keys() if any(isinstance(scores.get(k), (int, float)) for scores in responses.values())]
+                else:
+                    numeric_keys = [k for k in sorted(all_keys) if any(isinstance(scores.get(k), (int, float)) for scores in responses.values())]
+                
                 # Sort players by first numeric key descending (or alpha if none)
                 players = list(responses.keys())
                 if numeric_keys:
@@ -1630,7 +1642,8 @@ class FtMsgApp(App[None]):
                     score_parts = []
                     for k in numeric_keys[:3]:  # show first 3 metrics
                         v = scores.get(k, 0)
-                        score_parts.append(f"{k}={v}")
+                        label = schema.get(k, k) if schema else k
+                        score_parts.append(f"{label}={v}")
                     score_str = ", ".join(score_parts) if score_parts else "—"
                     lines.append(f"  [bold]{rank}.[/bold] {player:12}  {score_str}")
             log.write("\n".join(lines))

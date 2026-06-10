@@ -55,8 +55,10 @@ class ProfileManager:
             if any(w in key_lower for w in ("best", "max", "high", "top", "record")):
                 old = current.get(key, 0)
                 current[key] = max(old, value)
-            else:
+            elif any(w in key_lower for w in ("total", "sum", "accumulate", "wins", "played", "draws", "losses")):
                 current[key] = current.get(key, 0) + value
+            else:
+                current[key] = value
 
         _save_json(self._data)
 

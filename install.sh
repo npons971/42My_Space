@@ -18,8 +18,8 @@ log_warn()  { echo -e "${YELLOW}[42msg]${NC} $1"; }
 log_error() { echo -e "${RED}[42msg]${NC} $1" >&2; }
 
 command -v git >/dev/null 2>&1 || { log_error "git est requis mais non installé."; exit 1; }
+command -v uv >/dev/null 2>&1 || { log_error "uv est requis mais non installé. Installe-le via: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { log_error "python3 est requis mais non installé."; exit 1; }
-python3 -m venv --help >/dev/null 2>&1 || { log_error "python3 -m venv ne fonctionne pas. Installe le paquet python3-venv (ou python3-virtualenv)."; exit 1; }
 
 if [ -d "${INSTALL_DIR}" ]; then
     log_warn "Répertoire ${INSTALL_DIR} existe déjà. Mise à jour..."
@@ -33,23 +33,12 @@ fi
 cd "${INSTALL_DIR}"
 
 if [ ! -d "${VENV_DIR}" ]; then
-    log_info "Création du venv Python..."
-    python3 -m venv "${VENV_DIR}"
+    log_info "Création du venv Python avec uv..."
+    uv venv
 fi
 
-if [ ! -x "${VENV_DIR}/bin/pip" ]; then
-    log_error "pip introuvable dans le venv. Essaie: python3 -m ensurepip --upgrade"
-    exit 1
-fi
-
-log_info "Mise à jour de pip..."
-if ! "${VENV_DIR}/bin/pip" install --upgrade pip >/dev/null 2>&1; then
-    log_error "Échec de la mise à jour de pip."
-    exit 1
-fi
-
-log_info "Installation des dépendances..."
-if ! "${VENV_DIR}/bin/pip" install -r requirements.txt; then
+log_info "Installation des dépendances avec uv..."
+if ! uv pip install -e .; then
     log_error "Échec de l'installation des dépendances."
     log_error "Si l'erreur concerne pynacl, installe les paquets système:"
     log_error "  sudo apt-get install python3-dev libffi-dev libsodium-dev build-essential"
@@ -57,10 +46,10 @@ if ! "${VENV_DIR}/bin/pip" install -r requirements.txt; then
 fi
 
 log_info "Vérification de l'installation..."
-if ! "${PYTHON}" -c "import ftmsg; import textual; import nacl; print('OK')" 2>/dev/null; then
+if ! uv run python -c "import ftmsg; import textual; import nacl; print('OK')" 2>/dev/null; then
     log_error "Les dépendances ne sont pas correctement installées dans le venv."
     log_error "Tentative de réinstallation forcée..."
-    "${VENV_DIR}/bin/pip" install --force-reinstall -r requirements.txt || {
+    uv pip install --force-reinstall -e . || {
         log_error "Réinstallation forcée échouée aussi."
         exit 1
     }
@@ -72,13 +61,12 @@ cat > "${WRAPPER}" <<'EOF'
 #!/usr/bin/env bash
 # 42msg wrapper — lance le client TUI depuis le venv local
 INSTALL_DIR="${HOME}/.local/share/42msg"
-PYTHON="${INSTALL_DIR}/.venv/bin/python"
-if [ ! -x "${PYTHON}" ]; then
+if [ ! -d "${INSTALL_DIR}/.venv" ]; then
     echo "[42msg] Venv introuvable. Relance l'installation." >&2
     exit 1
 fi
 cd "${INSTALL_DIR}" || exit 1
-exec "${PYTHON}" -m ftmsg --relay wss://four2my-space.onrender.com "$@"
+exec uv run -m ftmsg --relay wss://four2my-space.onrender.com "$@"
 EOF
 chmod +x "${WRAPPER}"
 

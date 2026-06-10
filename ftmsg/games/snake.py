@@ -14,8 +14,8 @@ from .base import BaseGame, BaseGameSession, GameInvite, register_game
 class SnakeSession(BaseGameSession):
     """A solo snake game session rendered as a grid."""
 
-    GRID_W = 40
-    GRID_H = 24
+    GRID_W = 20
+    GRID_H = 20
 
     PHASE_STARTING = 0
     PHASE_PLAYING = 1
@@ -29,7 +29,7 @@ class SnakeSession(BaseGameSession):
         super().__init__(invite, on_state_change, on_score)
         self.phase = self.PHASE_STARTING
         self.start_timer = 30  # 30 ticks for countdown
-        self.snake: list[tuple[int, int]] = [(10, 12), (9, 12), (8, 12), (7, 12)]
+        self.snake: list[tuple[int, int]] = [(10, 10), (9, 10), (8, 10), (7, 10)]
         self.direction: tuple[int, int] = (1, 0)
         self.move_queue: list[tuple[int, int]] = []
         self.food = self._spawn_food()
@@ -60,7 +60,7 @@ class SnakeSession(BaseGameSession):
         if action == "restart" and self.phase == self.PHASE_GAME_OVER:
             self.phase = self.PHASE_STARTING
             self.start_timer = 30
-            self.snake = [(10, 12), (9, 12), (8, 12), (7, 12)]
+            self.snake = [(10, 10), (9, 10), (8, 10), (7, 10)]
             self.direction = (1, 0)
             self.move_queue = []
             self.food = self._spawn_food()
@@ -134,7 +134,7 @@ class SnakeSession(BaseGameSession):
         self.broadcast_state()
 
     def get_final_score(self) -> dict[str, Any]:
-        return {"score": self.score, "length": len(self.snake), "best_score": self.score}
+        return {"best_score": self.score, "games_played": 1}
 
     def get_render_state(self) -> dict[str, Any]:
         return {"active": self.is_active, "winner": self.winner, **self.state}
@@ -148,7 +148,7 @@ class SnakeGame(BaseGame):
     min_players = 1
     max_players = 1
     is_solo = True
-    score_schema = {"score": "Points", "length": "Taille", "best_score": "Meilleur score"}
+    score_schema = {"best_score": "Meilleur score", "games_played": "Parties jouées"}
 
     @classmethod
     def create_session(
@@ -169,21 +169,27 @@ class SnakeWidget(Container):
 
     DEFAULT_CSS = """
     SnakeWidget {
-        width: auto;
+        width: 100%;
         height: auto;
-        align: center middle;
-        layout: vertical;
         padding: 1 2;
+    }
+    #snake_header, #snake_footer {
+        content-align: center middle;
+        width: 100%;
     }
     #snake_canvas {
         margin: 1 0;
+        width: 40;
+        height: 20;
     }
     """
 
     def compose(self) -> ComposeResult:
+        from textual.containers import Center
         yield Static("", id="snake_header")
-        from textual_canvas import Canvas
-        yield Canvas(80, 48, id="snake_canvas")
+        with Center():
+            from textual_canvas import Canvas
+            yield Canvas(40, 40, id="snake_canvas")
         yield Static("", id="snake_footer")
 
     def watch_state(self, new_state: dict[str, Any]) -> None:
@@ -255,8 +261,8 @@ class SnakeWidget(Container):
             
             # Center the text approximately (each letter is ~4px wide, 5px high)
             text_w = len(text) * 4
-            text_x = (80 - text_w) // 2
-            text_y = (48 - 5) // 2
+            text_x = (40 - text_w) // 2
+            text_y = (40 - 5) // 2
             
             # Draw background box for text to make it readable
             canvas.draw_rectangle(text_x - 4, text_y - 4, text_w + 6, 13, Color.parse("black").with_alpha(0.8))
@@ -269,15 +275,15 @@ class SnakeWidget(Container):
             w1 = len(text1) * 4
             w2 = len(text2) * 4
             
-            x1 = (80 - w1) // 2
-            x2 = (80 - w2) // 2
+            x1 = (40 - w1) // 2
+            x2 = (40 - w2) // 2
             
-            y1 = (48 - 15) // 2
+            y1 = (40 - 15) // 2
             y2 = y1 + 7
             
             # Darken the whole screen
-            for y in range(48):
-                canvas.draw_line(0, y, 79, y, Color.parse("black").with_alpha(0.5))
+            for y in range(40):
+                canvas.draw_line(0, y, 39, y, Color.parse("black").with_alpha(0.5))
                 
             draw_text(canvas, x1, y1, text1, Color.parse("red"))
             draw_text(canvas, x2, y2, text2, Color.parse("red"))

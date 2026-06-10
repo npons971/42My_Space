@@ -1,18 +1,16 @@
 PROJECT_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 VENV_DIR    := $(PROJECT_DIR)/.venv
 PYTHON      := $(VENV_DIR)/bin/python
-PIP         := $(VENV_DIR)/bin/pip
+UV          := $(shell command -v uv)
 
 .PHONY: install run clean re fclean venv uninstall
 
 venv:
-	@test -d $(VENV_DIR) || (echo "[42msg] Création du venv..." && python3 -m venv $(VENV_DIR))
-	@echo "[42msg] Mise à jour de pip dans le venv..."
-	@$(PIP) install --upgrade pip --quiet
+	@test -d $(VENV_DIR) || (echo "[42msg] Création du venv avec uv..." && cd $(PROJECT_DIR) && uv venv)
 
 install: venv
-	@echo "[42msg] Installation des dépendances dans le venv..."
-	@$(PIP) install --no-user -r $(PROJECT_DIR)/requirements.txt
+	@echo "[42msg] Installation des dépendances avec uv..."
+	@cd $(PROJECT_DIR) && uv pip install -e .
 	@echo "[42msg] Configuration de l'alias..."
 	@# Supprime l'ancien alias s'il existe (pour éviter les doublons ou les anciennes versions)
 	@sed -i '/alias 42msg=/d' $(HOME)/.zshrc 2>/dev/null || true
@@ -21,11 +19,11 @@ install: venv
 
 relay: venv
 	@echo "[42msg] Lancement du relais local..."
-	@$(PYTHON) relay_server.py
+	@cd $(PROJECT_DIR) && uv run relay_server.py
 
 run:
 	@test -d $(VENV_DIR) || (echo "Lance 'make install' d'abord" && exit 1)
-	@$(PYTHON) -m ftmsg --relay wss://four2my-space.onrender.com
+	@cd $(PROJECT_DIR) && uv run -m ftmsg --relay wss://four2my-space.onrender.com
 
 clean:
 	@rm -rf $(VENV_DIR)

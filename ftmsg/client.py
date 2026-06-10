@@ -934,9 +934,19 @@ class FTMessageClient:
         scores = self.profile.get_game_score(game_id)
         if not scores:
             return f"Aucun score enregistré pour {game_id}"
-        lines = [f"📊  Score de {self.login} sur {game_id}  📊"]
-        for key, value in scores.items():
-            lines.append(f"  {key}: {value}")
+            
+        g = get_game(game_id)
+        schema = g.score_schema if g else {}
+        game_name = g.name if g else game_id
+        
+        lines = [f"📊  Score de {self.login} sur {game_name}  📊"]
+        if schema:
+            for key, label in schema.items():
+                if key in scores:
+                    lines.append(f"  {label}: {scores[key]}")
+        else:
+            for key, value in scores.items():
+                lines.append(f"  {key}: {value}")
         return "\n".join(lines)
 
     async def score_list(self) -> list[tuple[int, str, str]]:
