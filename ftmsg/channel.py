@@ -405,6 +405,7 @@ class ChannelClient:
         on_room_key: Callable[[str], None] | None = None,
         on_typing: Callable[[str], None] | None = None,
         on_game_frame: Callable[[dict[str, Any]], None] | None = None,
+        on_file_frame: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.login = login
         self.on_message = on_message
@@ -414,6 +415,7 @@ class ChannelClient:
         self.on_room_key = on_room_key
         self.on_typing = on_typing
         self.on_game_frame = on_game_frame
+        self.on_file_frame = on_file_frame
 
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
@@ -637,6 +639,10 @@ class ChannelClient:
                 elif ftype.startswith(("GAME_", "SCORE_", "PROFILE_")):
                     if self.on_game_frame:
                         self.on_game_frame(frame)
+
+                elif ftype in ("FILE_OFFER", "FILE_START", "FILE_CHUNK", "FILE_END"):
+                    if self.on_file_frame:
+                        await self.on_file_frame(frame)
 
                 else:
                     pass

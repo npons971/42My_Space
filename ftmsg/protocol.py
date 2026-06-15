@@ -7,6 +7,7 @@ from typing import Any
 
 Frame = dict[str, Any]
 MAX_FRAME_SIZE = 65536
+FILE_CHUNK_SIZE = 45 * 1024  # ~60KB after base64, fits in MAX_FRAME_SIZE
 
 
 def encode_frame(frame: Frame) -> bytes:

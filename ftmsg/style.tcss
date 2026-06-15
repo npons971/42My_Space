@@ -140,6 +140,40 @@ ProfileScreen {
     width: 100%;
 }
 
+FilePickerScreen {
+    align: center middle;
+}
+#file_picker_container {
+    width: 80;
+    height: 90%;
+    background: $surface;
+    border: thick $primary;
+    padding: 1 2;
+}
+.file-picker-title {
+    text-align: center;
+    text-style: bold;
+    color: $primary;
+    margin-bottom: 1;
+}
+#file_tree {
+    height: 1fr;
+    border: solid $surface-darken-2;
+    margin-bottom: 1;
+}
+#file_selected {
+    height: auto;
+    margin-bottom: 1;
+    color: $success;
+}
+#file_picker_buttons {
+    height: auto;
+    content-align: center middle;
+}
+#file_toggle_hidden {
+    margin: 0 1;
+}
+
 GameMenuScreen {
     align: center middle;
 }
@@ -241,6 +275,41 @@ GameInviteBanner Button {
 }
 #invite_join:hover {
     background: $success;
+}
+
+FileOfferBanner {
+    height: auto;
+    padding: 0 1;
+    background: $warning-darken-2;
+    color: $text;
+    border-top: solid $warning;
+    border-bottom: solid $warning-darken-2;
+}
+FileOfferBanner Static {
+    content-align: center middle;
+    height: auto;
+}
+FileOfferBanner Button {
+    margin: 0 1;
+}
+#file_offer_text {
+    width: 1fr;
+    content-align: left middle;
+    padding: 0 1;
+}
+#file_accept {
+    background: $success-darken-1;
+    border: solid $success;
+}
+#file_accept:hover {
+    background: $success;
+}
+#file_reject {
+    background: $error-darken-1;
+    border: solid $error;
+}
+#file_reject:hover {
+    background: $error;
 }
 
 ChessWidget {

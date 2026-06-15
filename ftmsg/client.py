@@ -27,6 +27,8 @@ from .security import generate_or_load_signing_keypair
 from .store import MessageStore
 from .trust import TrustStore
 
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 Mo
+
 
 class FTMessageClient:
     def __init__(self, login: str, db_path: Path | None = None) -> None:
@@ -73,6 +75,11 @@ class FTMessageClient:
         self.incoming_queue: asyncio.Queue[tuple[str, str, float]] = asyncio.Queue(maxsize=1000)
         self.events_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=500)
         self._loop: asyncio.AbstractEventLoop | None = None
+
+        self._files_dir = data_dir / "files"
+        self._files_dir.mkdir(parents=True, exist_ok=True)
+        self._incoming_files: dict[str, dict[str, Any]] = {}
+        self.file_offers_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
 
         # Game state
         self.active_invites: dict[str, GameInvite] = {}
@@ -247,6 +254,19 @@ class FTMessageClient:
                     if login in self._relay_members:
                         self._relay_members.remove(login)
                     await self._on_member_leave(login)
+
+                elif ftype == "HOST_CHANGED":
+                    new_owner = frame.get("new_owner", "")
+                    old_owner = frame.get("old_owner", "")
+                    if new_owner == self.login:
+                        self.is_hosting = True
+                        await self.events_queue.put(f"Tu es maintenant l'hôte du salon (remplace {old_owner})")
+                    else:
+                        self.is_hosting = False
+                        await self.events_queue.put(f"Hôte changé: {old_owner} -> {new_owner}")
+
+                elif ftype in ("FILE_OFFER", "FILE_START", "FILE_CHUNK", "FILE_END"):
+                    await self._handle_file_frame(frame)
 
                 elif ftype == "TYPING":
                     sender = str(frame.get("login", ""))
@@ -555,6 +575,7 @@ class FTMessageClient:
             on_disconnect=self._on_disconnect,
             on_room_key=on_room_key,
             on_typing=self._on_typing,
+            on_file_frame=self._handle_file_frame,
         )
 
         my_pubkey = base64.b64encode(bytes(self.enc_public_key)).decode("utf-8")
@@ -752,6 +773,171 @@ class FTMessageClient:
                 self._loop,
             )
 
+
+    # ------------------------------------------------------------------ #
+    # File transfer
+    # ------------------------------------------------------------------ #
+
+    async def send_file(self, filepath: str) -> str:
+        if not self.current_channel_name():
+            return "not_in_channel"
+        path = Path(filepath).expanduser()
+        if not path.exists():
+            return "file_not_found"
+        if not path.is_file():
+            return "not_a_file"
+        try:
+            data = path.read_bytes()
+        except Exception as exc:
+            return f"read_error: {exc}"
+        if len(data) > MAX_FILE_SIZE:
+            return "file_too_large"
+
+        import uuid
+        file_id = f"{self.login}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        file_name = path.name
+        file_size = len(data)
+        chunk_size = 45 * 1024
+        chunk_count = (file_size + chunk_size - 1) // chunk_size
+
+        # 1. Offer the file so peers can accept/reject
+        offer_frame = {
+            "type": "FILE_OFFER",
+            "sender_login": self.login,
+            "file_id": file_id,
+            "file_name": file_name,
+            "file_size": file_size,
+        }
+        await self._send_game_frame(offer_frame)
+        # Give peers a moment to see the offer before streaming chunks
+        await asyncio.sleep(5)
+
+        # 2. Start the transfer
+        start_frame = {
+            "type": "FILE_START",
+            "sender_login": self.login,
+            "file_id": file_id,
+            "file_name": file_name,
+            "file_size": file_size,
+            "chunk_count": chunk_count,
+        }
+        await self._send_game_frame(start_frame)
+
+        for i in range(chunk_count):
+            offset = i * chunk_size
+            chunk = data[offset:offset + chunk_size]
+            chunk_frame = {
+                "type": "FILE_CHUNK",
+                "sender_login": self.login,
+                "file_id": file_id,
+                "chunk_index": i,
+                "chunk_count": chunk_count,
+                "data": base64.b64encode(chunk).decode("utf-8"),
+                "is_last": i == chunk_count - 1,
+            }
+            await self._send_game_frame(chunk_frame)
+
+        await self.events_queue.put(f"Fichier envoyé: {file_name} ({file_size} octets)")
+        return "sent"
+
+    async def _handle_file_frame(self, frame: dict[str, Any]) -> None:
+        ftype = frame.get("type")
+        sender_login = frame.get("sender_login", "inconnu")
+        if ftype == "FILE_OFFER":
+            file_id = frame.get("file_id", "")
+            file_name = frame.get("file_name", "unknown")
+            file_size = frame.get("file_size", 0)
+            self._incoming_files[file_id] = {
+                "file_name": file_name,
+                "file_size": file_size,
+                "chunk_count": 0,
+                "chunks": {},
+                "received": 0,
+                "status": "pending",
+                "sender_login": sender_login,
+            }
+            await self.file_offers_queue.put({
+                "file_id": file_id,
+                "sender_login": sender_login,
+                "file_name": file_name,
+                "file_size": file_size,
+            })
+        elif ftype == "FILE_START":
+            file_id = frame.get("file_id", "")
+            file_name = frame.get("file_name", "unknown")
+            file_size = frame.get("file_size", 0)
+            chunk_count = frame.get("chunk_count", 0)
+            info = self._incoming_files.get(file_id)
+            if info is None:
+                # Create silently rejected entry so chunks are ignored
+                self._incoming_files[file_id] = {
+                    "file_name": file_name,
+                    "file_size": file_size,
+                    "chunk_count": chunk_count,
+                    "chunks": {},
+                    "received": 0,
+                    "status": "rejected",
+                    "sender_login": sender_login,
+                }
+            else:
+                info["chunk_count"] = chunk_count
+                info["file_size"] = file_size
+                info["file_name"] = file_name
+        elif ftype == "FILE_CHUNK":
+            file_id = frame.get("file_id", "")
+            chunk_index = frame.get("chunk_index", 0)
+            data_b64 = frame.get("data", "")
+            is_last = frame.get("is_last", False)
+            info = self._incoming_files.get(file_id)
+            if info is None or info["status"] == "rejected":
+                return
+            try:
+                chunk = base64.b64decode(data_b64)
+            except Exception:
+                return
+            info["chunks"][chunk_index] = chunk
+            info["received"] += len(chunk)
+            if is_last or len(info["chunks"]) == info.get("chunk_count", 0):
+                await self._finalize_file(file_id, sender_login)
+        elif ftype == "FILE_END":
+            file_id = frame.get("file_id", "")
+            info = self._incoming_files.pop(file_id, None)
+            if info and info["status"] != "rejected":
+                await self._finalize_file(file_id, sender_login, info=info)
+
+    def accept_file_offer(self, file_id: str) -> None:
+        info = self._incoming_files.get(file_id)
+        if info:
+            info["status"] = "accepted"
+
+    def reject_file_offer(self, file_id: str) -> None:
+        info = self._incoming_files.pop(file_id, None)
+        if info:
+            info["status"] = "rejected"
+
+    async def _finalize_file(self, file_id: str, sender_login: str, info: dict[str, Any] | None = None) -> None:
+        if info is None:
+            info = self._incoming_files.pop(file_id, None)
+        if info is None:
+            return
+        if info.get("status") == "rejected":
+            return
+        try:
+            full_data = b"".join(info["chunks"][i] for i in range(info["chunk_count"]))
+            dest = self._files_dir / info["file_name"]
+            counter = 1
+            orig_dest = dest
+            while dest.exists():
+                stem = orig_dest.stem
+                suffix = orig_dest.suffix
+                dest = self._files_dir / f"{stem}_{counter}{suffix}"
+                counter += 1
+            dest.write_bytes(full_data)
+            ts = time.time()
+            await self.incoming_queue.put((sender_login, f"📎 Fichier reçu: {dest.name} ({len(full_data)} octets) -> {dest}", ts))
+            await self.events_queue.put(f"📎 Fichier reçu de {sender_login}: {dest.name} ({len(full_data)} octets)")
+        except Exception as exc:
+            await self.events_queue.put(f"⚠️ Erreur réception fichier: {exc}")
 
     # ------------------------------------------------------------------ #
     # Games

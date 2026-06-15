@@ -129,11 +129,20 @@ async def _remove_from_channel(client: ClientState) -> None:
     client.channel_name = None
 
     if client.login == ch.owner_login:
-        await _broadcast(ch, {"type": "CHANNEL_CLOSED", "reason": "host disconnected"})
-        for member in list(ch.members.values()):
-            member.channel_name = None
-        del _channels[ch.name]
-        logger.info("channel '%s' closed (owner left)", ch.name)
+        if ch.members:
+            # Transfer ownership to the next member
+            new_owner = next(iter(ch.members.keys()))
+            ch.owner_login = new_owner
+            await _broadcast(ch, {
+                "type": "HOST_CHANGED",
+                "new_owner": new_owner,
+                "old_owner": client.login,
+            })
+            logger.info("channel '%s' owner changed from %s to %s", ch.name, client.login, new_owner)
+        else:
+            await _broadcast(ch, {"type": "CHANNEL_CLOSED", "reason": "host disconnected"})
+            del _channels[ch.name]
+            logger.info("channel '%s' closed (owner left, no members)", ch.name)
     elif was_member:
         await _broadcast(ch, {"type": "USER_LEFT", "login": client.login})
 
@@ -410,6 +419,12 @@ _HANDLERS = {
     "SCORE_RESP": _handle_game_frame,
     "PUBLIC_KEY": _handle_public_key,
     "ROOM_KEY": _handle_room_key,
+    "FILE_OFFER": _handle_game_frame,
+    "FILE_ACCEPT": _handle_game_frame,
+    "FILE_REJECT": _handle_game_frame,
+    "FILE_START": _handle_game_frame,
+    "FILE_CHUNK": _handle_game_frame,
+    "FILE_END": _handle_game_frame,
 }
 
 

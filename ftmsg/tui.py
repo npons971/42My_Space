@@ -19,6 +19,8 @@ from textual.containers import Container, Grid, Horizontal, Vertical, VerticalSc
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, RichLog, Static, TextArea, Label, ListItem, ListView, OptionList, TabbedContent, TabPane
+from textual.widgets import DirectoryTree
+from pathlib import Path
 from rich.text import Text as RichText
 
 from .client import FTMessageClient, default_login
@@ -39,7 +41,8 @@ _COMMANDS = [
     "/create ", "/join ", "/list", "/leave", "/peers",
     "/msg ", "/kick ", "/ban ", "/settings", "/help", "/quit",
     "/games", "/game_start ", "/game_join ", "/game_leave",
-    "/score", "/score ", "/leaderboard ", "/profile", "/profile "
+    "/score", "/score ", "/leaderboard ", "/profile", "/profile ",
+    "/sendfile ",
 ]
 
 _USER_COLORS = [
@@ -368,6 +371,68 @@ class ProfileScreen(ModalScreen):
 
 
 # --------------------------------------------------------------------------- #
+# File Picker Screen
+# --------------------------------------------------------------------------- #
+class FilteredDirectoryTree(DirectoryTree):
+    """DirectoryTree with optional hidden-files filter."""
+
+    def __init__(self, path: str | Path, show_hidden: bool = False, **kwargs: Any) -> None:
+        super().__init__(path, **kwargs)
+        self.show_hidden = show_hidden
+
+    def filter_paths(self, paths):
+        if self.show_hidden:
+            return paths
+        return [p for p in paths if not p.name.startswith(".")]
+
+    def toggle_hidden(self) -> None:
+        self.show_hidden = not self.show_hidden
+        self.reload()
+
+
+class FilePickerScreen(ModalScreen):
+    """Built-in file picker using DirectoryTree."""
+
+    BINDINGS = [
+        ("escape", "close", "Fermer"),
+    ]
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.selected_path: str | None = None
+
+    def compose(self) -> ComposeResult:
+        with Container(id="file_picker_container"):
+            yield Static("📁  S É L E C T I O N N E R   U N   F I C H I E R", classes="file-picker-title")
+            yield FilteredDirectoryTree(Path.home(), show_hidden=False, id="file_tree")
+            yield Static("", id="file_selected")
+            with Horizontal(id="file_picker_buttons"):
+                yield Button("👁  Cachés", id="file_toggle_hidden", variant="default")
+                yield Button("✅  Envoyer", id="file_confirm", variant="success", disabled=True)
+                yield Button("✕  Annuler", id="file_cancel", variant="default")
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        self.selected_path = str(event.path)
+        self.query_one("#file_selected", Static).update(f"[bold green]{self.selected_path}[/bold green]")
+        self.query_one("#file_confirm", Button).disabled = False
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "file_toggle_hidden":
+            tree = self.query_one("#file_tree", FilteredDirectoryTree)
+            tree.toggle_hidden()
+            btn = self.query_one("#file_toggle_hidden", Button)
+            btn.label = "👁  Cachés" if tree.show_hidden else "👁  Cachés"
+            btn.variant = "primary" if tree.show_hidden else "default"
+        elif event.button.id == "file_confirm":
+            self.dismiss(self.selected_path)
+        elif event.button.id == "file_cancel":
+            self.dismiss(None)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+# --------------------------------------------------------------------------- #
 # Game Menu Screen
 # --------------------------------------------------------------------------- #
 class GameMenuScreen(ModalScreen):
@@ -461,6 +526,43 @@ class GameInviteBanner(Horizontal):
             self.remove()
         elif event.button.id == "invite_dismiss":
             self.remove()
+
+
+# --------------------------------------------------------------------------- #
+# File Offer Banner
+# --------------------------------------------------------------------------- #
+class FileOfferBanner(Horizontal):
+    """Banner shown when someone offers a file transfer."""
+
+    def __init__(self, app_ref: "FtMsgApp", file_id: str, sender_login: str, file_name: str, file_size: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+        self.file_id = file_id
+        self.sender_login = sender_login
+        self.file_name = file_name
+        self.file_size = file_size
+
+    def _format_size(self) -> str:
+        if self.file_size > 1024 * 1024:
+            return f"{self.file_size / (1024 * 1024):.1f} Mo"
+        if self.file_size > 1024:
+            return f"{self.file_size / 1024:.1f} Ko"
+        return f"{self.file_size} o"
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            f"📎 {self.sender_login} veut envoyer [bold]{self.file_name}[/bold] ({self._format_size()})",
+            id="file_offer_text",
+        )
+        yield Button("✅ Accepter", id="file_accept", variant="success")
+        yield Button("❌ Refuser", id="file_reject", variant="error")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "file_accept":
+            self.app_ref.client.accept_file_offer(self.file_id)
+        elif event.button.id == "file_reject":
+            self.app_ref.client.reject_file_offer(self.file_id)
+        self.remove()
 
 
 # --------------------------------------------------------------------------- #
@@ -1021,6 +1123,28 @@ class FtMsgApp(App[None]):
         else:
             self.notify(f"Erreur: {status}", severity="error")
 
+    def _on_file_selected(self, filepath: str | None) -> None:
+        if not filepath:
+            return
+        self.run_worker(self._do_send_file(filepath))
+
+    async def _do_send_file(self, filepath: str) -> None:
+        log = self.query_one("#messages", ChatLog)
+        now = time.strftime("%H:%M:%S")
+        status = await self.client.send_file(filepath)
+        if status == "sent":
+            log.write(f"[green][{now}] Fichier en cours d'envoi...[/green]")
+        elif status == "file_not_found":
+            log.write(f"[red][{now}] Fichier introuvable: {filepath}[/red]")
+        elif status == "not_a_file":
+            log.write(f"[red][{now}] Ce n'est pas un fichier: {filepath}[/red]")
+        elif status == "not_in_channel":
+            log.write(f"[red][{now}] Tu dois être dans un salon pour envoyer un fichier[/red]")
+        elif status == "file_too_large":
+            log.write(f"[red][{now}] Fichier trop volumineux (max 10 Mo)[/red]")
+        else:
+            log.write(f"[red][{now}] Erreur envoi fichier: {status}[/red]")
+
     async def _do_leave_game(self) -> None:
         await self.client.leave_game()
         self._game_screen = None
@@ -1085,6 +1209,70 @@ class FtMsgApp(App[None]):
         encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
         seq = f"\033]52;c;{encoded}\a"
         print(seq, end="", flush=True)
+
+    def _pick_file(self) -> str | None:
+        """Pick a file path using a native GUI dialog or clipboard."""
+        has_gui = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+        # 1. Try tkinter (portable, works on most systems with GUI)
+        if has_gui:
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                filepath = filedialog.askopenfilename(title="Choisir un fichier à envoyer")
+                root.destroy()
+                if filepath:
+                    return filepath
+            except Exception:
+                pass
+
+        # 2. Try zenity (Linux GNOME/GTK)
+        if has_gui:
+            try:
+                result = subprocess.run(
+                    ["zenity", "--file-selection", "--title=Choisir un fichier à envoyer"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except Exception:
+                pass
+
+        # 3. Try kdialog (KDE)
+        if has_gui:
+            try:
+                result = subprocess.run(
+                    ["kdialog", "--getopenfile", "", "*"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except Exception:
+                pass
+
+        # 4. Try osascript (macOS)
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", "return POSIX path of (choose file)"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:
+            pass
+
+        # 5. Try clipboard
+        if pyperclip is not None:
+            try:
+                text = pyperclip.paste()
+                if text and os.path.isfile(text.strip()):
+                    return text.strip()
+            except Exception:
+                pass
+        return None
 
     def _desktop_notify(self, title: str, msg: str) -> None:
         if not self.desktop_notifications:
@@ -1260,12 +1448,35 @@ class FtMsgApp(App[None]):
             now = time.strftime("%H:%M:%S")
             log.write(f"[dim yellow][{now}] {event}[/dim yellow]")
 
+        while True:
+            try:
+                offer = self.client.file_offers_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._show_file_offer(offer)
+
         if new_messages:
             if at_bottom:
                 log.scroll_end()
             else:
                 self._has_unread = True
                 self.notify("Nouveaux messages", title="42msg", severity="information")
+
+    def _show_file_offer(self, offer: dict[str, Any]) -> None:
+        try:
+            chat_area = self.query_one("#chat_area", Container)
+            for existing in chat_area.query(FileOfferBanner):
+                existing.remove()
+            banner = FileOfferBanner(
+                self,
+                offer["file_id"],
+                offer["sender_login"],
+                offer["file_name"],
+                offer["file_size"],
+            )
+            chat_area.mount(banner, before=self.query_one("#compose", Container))
+        except Exception:
+            pass
 
     async def on_unmount(self) -> None:
         await self.client.stop()
@@ -1345,6 +1556,7 @@ class FtMsgApp(App[None]):
         "  [bold]/profile <login>[/bold]                         — voir le profil d'un joueur\n"
         "  [bold]/profile bio <texte>[/bold]                     — changer ta bio\n"
         "  [bold]/profile status <texte>[/bold]                  — changer ton statut\n"
+        "  [bold]/sendfile [chemin][/bold]                       — envoyer un fichier (max 10 Mo, salon obligatoire)\n"
         "  [bold]/settings[/bold]                                — paramètres\n"
         "  [bold]/help[/bold]                                    — cette aide\n"
         "  [bold]/quit[/bold]                                    — quitter\n"
@@ -1495,6 +1707,28 @@ class FtMsgApp(App[None]):
                     log.write(f"[red][{now}] {target} n'est pas dans le salon[/red]")
                 else:
                     log.write(f"[red][{now}] Envoi MP échoué[/red]")
+            # event.input.value = ""
+            return
+
+        if cmd == "/sendfile":
+            parts = content.split(" ", 1)
+            if len(parts) < 2 or not parts[1].strip():
+                self.push_screen(FilePickerScreen(), callback=self._on_file_selected)
+                return
+            filepath = parts[1].strip()
+            status = await self.client.send_file(filepath)
+            if status == "sent":
+                log.write(f"[green][{now}] Fichier en cours d'envoi...[/green]")
+            elif status == "file_not_found":
+                log.write(f"[red][{now}] Fichier introuvable: {filepath}[/red]")
+            elif status == "not_a_file":
+                log.write(f"[red][{now}] Ce n'est pas un fichier: {filepath}[/red]")
+            elif status == "not_in_channel":
+                log.write(f"[red][{now}] Tu dois être dans un salon pour envoyer un fichier[/red]")
+            elif status == "file_too_large":
+                log.write(f"[red][{now}] Fichier trop volumineux (max 10 Mo)[/red]")
+            else:
+                log.write(f"[red][{now}] Erreur envoi fichier: {status}[/red]")
             # event.input.value = ""
             return
 
