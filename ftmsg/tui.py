@@ -271,12 +271,27 @@ class ChatLog(RichLog):
         return result
 
 
+class HistoryTextArea(TextArea):
+    """TextArea avec ctrl+c qui copie dans le presse-papier système."""
+
+    def action_copy(self) -> None:
+        text = self.selected_text or ""
+        if not text:
+            self.app.notify("Aucun texte selectionne", severity="warning")
+            return
+        if self.app._copy_to_clipboard(text):
+            self.app.notify("Texte copie dans le presse-papier", title="Copie", severity="information")
+        else:
+            self.app.notify("Impossible de copier (presse-papier non accessible)", severity="error")
+
+
 class CopyScreen(ModalScreen):
     """Ecran modal pour visualiser et copier l'historique du chat."""
 
     BINDINGS = [
         ("escape", "close", "Fermer"),
         ("ctrl+e", "close", "Fermer"),
+        ("ctrl+c", "copy_selection", "Copier"),
     ]
 
 
@@ -288,32 +303,39 @@ class CopyScreen(ModalScreen):
         with Container(id="copy_container"):
             yield Static("Historique", classes="copy-title")
             history = "\n".join(self.app_ref._chat_history[-500:])
-            yield TextArea(history, read_only=True, id="copy_area")
+            yield HistoryTextArea(history, read_only=True, id="copy_area")
             with Horizontal(id="copy_buttons"):
-                yield Button("Copier selection", id="copy_selection", variant="success")
+                yield Button("Copier", id="copy_selection", variant="success")
                 yield Button("Copier tout", id="copy_all", variant="primary")
                 yield Button("Fermer", id="copy_close", variant="default")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    def _do_copy_selection(self) -> None:
         ta = self.query_one("#copy_area", TextArea)
+        text = ""
+        if hasattr(ta, "selected_text"):
+            text = ta.selected_text or ""
+        if not text:
+            self.app_ref.notify("Aucun texte selectionne", severity="warning")
+            return
+        if self.app_ref._copy_to_clipboard(text):
+            self.app_ref.notify("Texte copie dans le presse-papier", title="Copie", severity="information")
+        else:
+            self.app_ref.notify("Impossible de copier (presse-papier non accessible)", severity="error")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "copy_selection":
-            text = ""
-            if hasattr(ta, "selected_text"):
-                text = ta.selected_text or ""
-            if not text:
-                self.app_ref.notify("Aucun texte selectionne", severity="warning")
-                return
-            if self.app_ref._copy_to_clipboard(text):
-                self.app_ref.notify("Texte copie dans le presse-papier", title="Copie", severity="information")
-            else:
-                self.app_ref.notify("Impossible de copier (presse-papier non accessible)", severity="error")
+            self._do_copy_selection()
         elif event.button.id == "copy_all":
+            ta = self.query_one("#copy_area", TextArea)
             if self.app_ref._copy_to_clipboard(ta.text):
                 self.app_ref.notify("Historique copie dans le presse-papier", title="Copie", severity="information")
             else:
                 self.app_ref.notify("Impossible de copier (presse-papier non accessible)", severity="error")
         elif event.button.id == "copy_close":
             self.dismiss()
+
+    def action_copy_selection(self) -> None:
+        self._do_copy_selection()
 
     def action_close(self) -> None:
         self.dismiss()

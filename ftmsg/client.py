@@ -889,7 +889,7 @@ class FTMessageClient:
             data_b64 = frame.get("data", "")
             is_last = frame.get("is_last", False)
             info = self._incoming_files.get(file_id)
-            if info is None or info["status"] == "rejected":
+            if info is None or info["status"] != "accepted":
                 return
             try:
                 chunk = base64.b64decode(data_b64)
@@ -902,7 +902,7 @@ class FTMessageClient:
         elif ftype == "FILE_END":
             file_id = frame.get("file_id", "")
             info = self._incoming_files.pop(file_id, None)
-            if info and info["status"] != "rejected":
+            if info and info["status"] == "accepted":
                 await self._finalize_file(file_id, sender_login, info=info)
 
     def accept_file_offer(self, file_id: str) -> None:
@@ -920,7 +920,7 @@ class FTMessageClient:
             info = self._incoming_files.pop(file_id, None)
         if info is None:
             return
-        if info.get("status") == "rejected":
+        if info.get("status") != "accepted":
             return
         try:
             full_data = b"".join(info["chunks"][i] for i in range(info["chunk_count"]))
