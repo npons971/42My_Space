@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
 import hashlib
 import os
 import re
@@ -554,7 +555,8 @@ class GameInviteBanner(Horizontal):
 # File Offer Banner
 # --------------------------------------------------------------------------- #
 class FileOfferBanner(Horizontal):
-    """Banner shown when someone offers a file transfer."""
+    """Banner shown when someone offers a file transfer.
+    Auto-dismisses after 5 seconds if the user hasn't responded."""
 
     def __init__(self, app_ref: "FtMsgApp", file_id: str, sender_login: str, file_name: str, file_size: int, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -563,6 +565,7 @@ class FileOfferBanner(Horizontal):
         self.sender_login = sender_login
         self.file_name = file_name
         self.file_size = file_size
+        self._auto_dismiss_timer = None
 
     def _format_size(self) -> str:
         if self.file_size > 1024 * 1024:
@@ -579,7 +582,17 @@ class FileOfferBanner(Horizontal):
         yield Button("✅ Accepter", id="file_accept", variant="success")
         yield Button("❌ Refuser", id="file_reject", variant="error")
 
+    def on_mount(self) -> None:
+        self._auto_dismiss_timer = self.set_timer(5, self._auto_dismiss)
+
+    def _auto_dismiss(self) -> None:
+        if self.is_mounted:
+            self.app_ref.client.reject_file_offer(self.file_id)
+            self.remove()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if self._auto_dismiss_timer:
+            self._auto_dismiss_timer.stop()
         if event.button.id == "file_accept":
             self.app_ref.client.accept_file_offer(self.file_id)
         elif event.button.id == "file_reject":
@@ -1196,17 +1209,23 @@ class FtMsgApp(App[None]):
         self._game_screen = None
 
     def _copy_to_clipboard(self, text: str) -> bool:
-        """Copy text to system clipboard using pyperclip, CLI tools, or OSC 52."""
+        """Copy text to system clipboard using pyperclip, CLI tools, or OSC 52.
+        
+        All clipboard operations are wrapped with timeouts to prevent the TUI
+        from freezing on Linux when X11/Wayland tools hang (e.g. xclip over SSH).
+        """
         if not text:
             return False
-        # 1. Try pyperclip
+        # 1. Try pyperclip (with thread timeout to avoid blocking the event loop)
         if pyperclip is not None:
             try:
-                pyperclip.copy(text)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(pyperclip.copy, text)
+                    future.result(timeout=2)
                 return True
             except Exception:
                 pass
-        # 2. Try common CLI tools
+        # 2. Try common CLI tools with a 2-second timeout
         for cmd, args in [
             (["wl-copy"], {}),
             (["xclip", "-selection", "clipboard"], {}),
@@ -1214,7 +1233,7 @@ class FtMsgApp(App[None]):
             (["pbcopy"], {}),
         ]:
             try:
-                subprocess.run(cmd, input=text.encode(), check=True, capture_output=True, **args)
+                subprocess.run(cmd, input=text.encode(), check=True, capture_output=True, timeout=2, **args)
                 return True
             except Exception:
                 continue
