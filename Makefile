@@ -14,7 +14,7 @@ install: venv
 	@echo "[42msg] Configuration de l'alias..."
 	@# Supprime l'ancien alias s'il existe (pour éviter les doublons ou les anciennes versions)
 	@sed -i '/alias 42msg=/d' $(HOME)/.zshrc 2>/dev/null || true
-	@echo "alias 42msg='exec env PYTHONPATH=$(PROJECT_DIR) $(PYTHON) -m ftmsg --relay wss://four2my-space.onrender.com'" >> $(HOME)/.zshrc
+	@echo "alias 42msg='(cd $(PROJECT_DIR) && git pull --quiet --rebase 2>/dev/null && uv pip install --quiet -e . 2>/dev/null); env PYTHONPATH=$(PROJECT_DIR) $(PYTHON) -m ftmsg --relay wss://four2my-space.onrender.com'" >> $(HOME)/.zshrc
 	@echo "[42msg] Alias ajouté dans $(HOME)/.zshrc"
 
 relay: venv

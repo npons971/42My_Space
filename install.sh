@@ -66,7 +66,16 @@ if [ ! -d "${INSTALL_DIR}/.venv" ]; then
     exit 1
 fi
 cd "${INSTALL_DIR}" || exit 1
-exec uv run -m ftmsg --relay wss://four2my-space.onrender.com "$@"
+
+# Tentative de mise à jour (silencieuse, non bloquante)
+if [ -d "${INSTALL_DIR}/.git" ]; then
+    (
+        git pull --quiet --rebase 2>/dev/null
+        uv pip install --quiet -e . 2>/dev/null
+    ) &>/dev/null &
+fi
+
+uv run -m ftmsg --relay wss://four2my-space.onrender.com "$@"
 EOF
 chmod +x "${WRAPPER}"
 

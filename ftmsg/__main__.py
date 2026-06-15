@@ -8,25 +8,48 @@ from .tui import run_tui
 
 
 def _check_update() -> None:
-    """Tente de mettre à jour le code via git pull avant de lancer l'application."""
+    """Tente de mettre à jour le code et les dépendances via git pull."""
     import os
     import subprocess
-    
+    import shutil
+
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     git_dir = os.path.join(project_dir, ".git")
-    
-    if os.path.exists(git_dir):
-        try:
-            # On laisse 3 secondes maximum pour éviter de bloquer si pas de réseau
-            subprocess.run(
-                ["git", "pull", "--rebase", "--quiet"],
-                cwd=project_dir,
-                timeout=3,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-        except Exception:
-            pass
+
+    if not os.path.exists(git_dir):
+        return
+
+    try:
+        # Git pull avec timeout court
+        result = subprocess.run(
+            ["git", "pull", "--rebase", "--quiet"],
+            cwd=project_dir,
+            timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Si le pull a réussi, mettre à jour les dépendances
+        if result.returncode == 0:
+            pip_cmd = None
+            if shutil.which("uv"):
+                pip_cmd = ["uv", "pip", "install", "--quiet", "-e", "."]
+            elif shutil.which("pip3"):
+                pip_cmd = ["pip3", "install", "--quiet", "-e", "."]
+            elif shutil.which("pip"):
+                pip_cmd = ["pip", "install", "--quiet", "-e", "."]
+            if pip_cmd:
+                try:
+                    subprocess.run(
+                        pip_cmd,
+                        cwd=project_dir,
+                        timeout=30,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 def main() -> None:
     _check_update()
