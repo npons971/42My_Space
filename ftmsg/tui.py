@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import os
 import re
 import subprocess
 import time
 from typing import Any, Coroutine, Callable
+
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Grid, Horizontal, Vertical, VerticalScroll, ScrollableContainer, Center
@@ -1044,9 +1050,17 @@ class FtMsgApp(App[None]):
         self._game_screen = None
 
     def _copy_to_clipboard(self, text: str) -> bool:
-        """Copy text to system clipboard using common CLI tools."""
+        """Copy text to system clipboard using pyperclip, CLI tools, or OSC 52."""
         if not text:
             return False
+        # 1. Try pyperclip
+        if pyperclip is not None:
+            try:
+                pyperclip.copy(text)
+                return True
+            except Exception:
+                pass
+        # 2. Try common CLI tools
         for cmd, args in [
             (["wl-copy"], {}),
             (["xclip", "-selection", "clipboard"], {}),
@@ -1058,7 +1072,19 @@ class FtMsgApp(App[None]):
                 return True
             except Exception:
                 continue
+        # 3. Fallback OSC 52 (works in many modern terminals)
+        try:
+            self._osc52_copy(text)
+            return True
+        except Exception:
+            pass
         return False
+
+    def _osc52_copy(self, text: str) -> None:
+        """Copy text using OSC 52 terminal escape sequence."""
+        encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        seq = f"\033]52;c;{encoded}\a"
+        print(seq, end="", flush=True)
 
     def _desktop_notify(self, title: str, msg: str) -> None:
         if not self.desktop_notifications:

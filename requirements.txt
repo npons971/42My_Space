@@ -5,3 +5,4 @@ pytest
 websockets
 chess
 textual-canvas
+pyperclip
